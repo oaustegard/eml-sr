@@ -521,6 +521,541 @@ def discover(
     }
 
 
+# ─── Growing tree (curriculum learning) ──────────────────────
+#
+# Rather than searching a fixed depth-D tree from scratch — a needle in a
+# 2^D-sized haystack at deep depths — we grow the tree one leaf at a time.
+# Start at depth 1, train to convergence, then split the leaf whose gradient
+# magnitude is largest (the one most "wanting" to change). Each split replaces
+# a leaf L with an eml subtree whose parameters are initialized so the subtree
+# approximates exp(x) via eml(x, 1) — the optimizer adjusts surrounding weights
+# to absorb the discrepancy. Analogous to Net2Net / progressive growing.
+
+class GrowingEMLTree(nn.Module):
+    """EML tree that grows by splitting leaves.
+
+    Starts as a depth-1 tree (1 internal node, 2 leaves). Leaves can be
+    split into eml subtrees to grow the tree incrementally, providing a
+    warm start for deeper formulas.
+
+    Nodes are stored in a flat list; each entry is a dict with 'type'
+    ('leaf' or 'internal'), 'key' (into self._params), and for internal
+    nodes 'left'/'right' (indices into self.nodes). When a leaf is split,
+    its params are orphaned (unreachable from root) but not deleted, so
+    optimizer state stays consistent across grow steps.
+    """
+
+    def __init__(self, init_scale: float = 1.0):
+        super().__init__()
+        self._params = nn.ParameterDict()
+        self.nodes: list = []
+        self.init_scale = init_scale
+        self._next_key = 0
+        # Build initial: two leaves + one internal root (depth 1)
+        l0 = self._new_leaf()
+        l1 = self._new_leaf()
+        self.root = self._new_internal(l0, l1)
+
+    # --- construction ---
+
+    def _fresh_key(self, prefix: str) -> str:
+        k = f"{prefix}_{self._next_key}"
+        self._next_key += 1
+        return k
+
+    def _new_leaf(self) -> int:
+        key = self._fresh_key("leaf")
+        init = torch.randn(2, dtype=REAL) * self.init_scale
+        init[0] += 2.0  # bias toward constant 1
+        self._params[key] = nn.Parameter(init)
+        idx = len(self.nodes)
+        self.nodes.append({"type": "leaf", "key": key})
+        return idx
+
+    def _new_internal(self, left: int, right: int) -> int:
+        key = self._fresh_key("gate")
+        init = torch.randn(2, 3, dtype=REAL) * self.init_scale
+        init[..., 0] += 4.0  # bias toward constant 1
+        self._params[key] = nn.Parameter(init)
+        idx = len(self.nodes)
+        self.nodes.append({"type": "internal", "key": key,
+                           "left": left, "right": right})
+        return idx
+
+    # --- topology ---
+
+    def parent_of(self, idx: int):
+        for i, n in enumerate(self.nodes):
+            if n["type"] == "internal" and (n["left"] == idx or n["right"] == idx):
+                return i
+        return None
+
+    def active_nodes(self) -> list:
+        """Nodes reachable from root, pre-order."""
+        seen = []
+        seen_set = set()
+        stack = [self.root]
+        while stack:
+            i = stack.pop()
+            if i in seen_set:
+                continue
+            seen_set.add(i)
+            seen.append(i)
+            n = self.nodes[i]
+            if n["type"] == "internal":
+                stack.append(n["right"])
+                stack.append(n["left"])
+        return seen
+
+    def active_leaves(self) -> list:
+        return [i for i in self.active_nodes() if self.nodes[i]["type"] == "leaf"]
+
+    def current_depth(self) -> int:
+        def _d(i):
+            n = self.nodes[i]
+            if n["type"] == "leaf":
+                return 0
+            return 1 + max(_d(n["left"]), _d(n["right"]))
+        return _d(self.root)
+
+    def depth_of_node(self, target: int) -> int:
+        """Depth (distance from root) of a given node index; -1 if unreachable."""
+        def _d(i, cur):
+            if i == target:
+                return cur
+            n = self.nodes[i]
+            if n["type"] == "leaf":
+                return -1
+            dl = _d(n["left"], cur + 1)
+            if dl >= 0:
+                return dl
+            return _d(n["right"], cur + 1)
+        return _d(self.root, 0)
+
+    def n_internal_active(self) -> int:
+        return sum(1 for i in self.active_nodes() if self.nodes[i]["type"] == "internal")
+
+    # --- forward ---
+
+    def forward(self, x, tau: float = 1.0):
+        x_c = x.to(DTYPE)
+        cache: dict = {}
+        val = self._eval(self.root, x_c, tau, cache)
+        # Collect active softmaxed probs for entropy regularization / reporting.
+        leaf_probs: list = []
+        gate_probs: list = []
+        for i in self.active_nodes():
+            n = self.nodes[i]
+            p = self._params[n["key"]]
+            if n["type"] == "leaf":
+                leaf_probs.append(torch.softmax(p / tau, dim=0))
+            else:
+                gate_probs.append(torch.softmax(p / tau, dim=-1))
+        return val, leaf_probs, gate_probs
+
+    def _eval(self, idx: int, x_c, tau: float, cache: dict):
+        if idx in cache:
+            return cache[idx]
+        n = self.nodes[idx]
+        if n["type"] == "leaf":
+            logits = self._params[n["key"]]
+            w = torch.softmax(logits / tau, dim=0).to(DTYPE)
+            ones = torch.ones_like(x_c)
+            val = w[0] * ones + w[1] * x_c
+        else:
+            gate = self._params[n["key"]]
+            p = torch.softmax(gate / tau, dim=-1)  # (2, 3), real
+            left_val = self._eval(n["left"], x_c, tau, cache)
+            right_val = self._eval(n["right"], x_c, tau, cache)
+
+            p0l, p1l, p2l = p[0, 0], p[0, 1], p[0, 2]
+            p0r, p1r, p2r = p[1, 0], p[1, 1], p[1, 2]
+
+            # Mask out child contribution when its probability is negligible,
+            # to avoid 0*inf = nan (child values may be clamped-inf).
+            mask_l = p2l > _CHILD_EPS
+            mask_r = p2r > _CHILD_EPS
+            zero_r = torch.zeros_like(left_val.real)
+            zero_i = torch.zeros_like(left_val.imag)
+            left_r = torch.where(mask_l, left_val.real, zero_r)
+            left_i = torch.where(mask_l, left_val.imag, zero_i)
+            right_r = torch.where(mask_r, right_val.real, zero_r)
+            right_i = torch.where(mask_r, right_val.imag, zero_i)
+            p2l_s = torch.where(mask_l, p2l, torch.zeros_like(p2l))
+            p2r_s = torch.where(mask_r, p2r, torch.zeros_like(p2r))
+
+            x_r = x_c.real
+            x_i = x_c.imag
+            lr = p0l + p1l * x_r + p2l_s * left_r
+            li = p1l * x_i + p2l_s * left_i
+            rr = p0r + p1r * x_r + p2r_s * right_r
+            ri = p1r * x_i + p2r_s * right_i
+
+            l_in = torch.complex(lr, li)
+            r_in = torch.complex(rr, ri)
+            val = eml_op(l_in, r_in)
+            val = torch.complex(
+                torch.nan_to_num(val.real, nan=0.0, posinf=_CLAMP, neginf=-_CLAMP)
+                    .clamp(-_CLAMP, _CLAMP),
+                torch.nan_to_num(val.imag, nan=0.0, posinf=_CLAMP, neginf=-_CLAMP)
+                    .clamp(-_CLAMP, _CLAMP),
+            )
+        cache[idx] = val
+        return val
+
+    # --- growing ---
+
+    def split_leaf(self, leaf_idx: int) -> int:
+        """Replace `leaf_idx` with an eml subtree approximating exp(x)=eml(x, 1).
+
+        Returns the new internal node index. The old leaf's parameters are
+        orphaned (unreachable) but remain in the parameter dict so that any
+        live optimizer state referencing them stays valid.
+        """
+        assert self.nodes[leaf_idx]["type"] == "leaf", "can only split leaves"
+        # New leaves: left biased toward x, right biased toward constant 1
+        new_l = self._new_leaf()
+        new_r = self._new_leaf()
+        with torch.no_grad():
+            k = 4.0
+            self._params[self.nodes[new_l]["key"]].copy_(
+                torch.tensor([-k, k], dtype=REAL))  # → "x"
+            self._params[self.nodes[new_r]["key"]].copy_(
+                torch.tensor([k, -k], dtype=REAL))  # → "1"
+        # New internal: gate routes both sides to child, giving eml(x, 1) = exp(x)
+        new_int = self._new_internal(new_l, new_r)
+        with torch.no_grad():
+            k = 4.0
+            g = torch.full((2, 3), -k, dtype=REAL)
+            g[:, 2] = k  # "child"
+            self._params[self.nodes[new_int]["key"]].copy_(g)
+        # Rewire parent (or root) to point at new_int instead of leaf_idx.
+        # Also bias the parent gate side toward "child" so the new subtree
+        # is visible to the parent — otherwise a gate that had hard-snapped
+        # to "1" or "x" would leave the split inert.
+        if leaf_idx == self.root:
+            self.root = new_int
+        else:
+            parent = self.parent_of(leaf_idx)
+            assert parent is not None, "orphan leaf has no parent"
+            pn = self.nodes[parent]
+            if pn["left"] == leaf_idx:
+                pn["left"] = new_int
+                side = 0
+            else:
+                pn["right"] = new_int
+                side = 1
+            with torch.no_grad():
+                pg = self._params[pn["key"]]
+                # Reset the side's logits to bias toward "child" (index 2).
+                pg[side, 0] = -2.0
+                pg[side, 1] = -2.0
+                pg[side, 2] = 2.0
+        return new_int
+
+    def leaf_gradient_magnitudes(self, x_data, y_target, tau: float) -> dict:
+        """Compute ||∂MSE/∂leaf_logits|| for each active leaf.
+
+        Used as the split-selection heuristic: the leaf most "wanting" to
+        change is the one with the largest gradient magnitude.
+        """
+        self.zero_grad()
+        pred, _, _ = self(x_data, tau=tau)
+        mse = torch.mean((pred - y_target).abs() ** 2).real
+        if not torch.isfinite(mse):
+            return {}
+        mse.backward()
+        grads = {}
+        for i in self.active_leaves():
+            key = self.nodes[i]["key"]
+            g = self._params[key].grad
+            grads[i] = float(g.norm().item()) if g is not None else 0.0
+        self.zero_grad()
+        return grads
+
+    # --- snapping & extraction ---
+
+    def snap(self):
+        """Hard-snap all active weights to single-choice. Returns detached copy."""
+        import copy
+        tree = copy.deepcopy(self)
+        k = 50.0
+        with torch.no_grad():
+            for i in tree.active_nodes():
+                n = tree.nodes[i]
+                p = tree._params[n["key"]]
+                if n["type"] == "leaf":
+                    c = int(torch.argmax(p).item())
+                    new = torch.full_like(p, -k)
+                    new[c] = k
+                    p.copy_(new)
+                else:
+                    choices = torch.argmax(p, dim=-1)
+                    new = torch.full_like(p, -k)
+                    new[0, int(choices[0].item())] = k
+                    new[1, int(choices[1].item())] = k
+                    p.copy_(new)
+        return tree
+
+    def n_uncertain(self, threshold: float = 0.01) -> int:
+        n = 0
+        with torch.no_grad():
+            for i in self.active_nodes():
+                node = self.nodes[i]
+                p = self._params[node["key"]]
+                if node["type"] == "leaf":
+                    probs = torch.softmax(p, dim=0)
+                    if probs.max().item() < 1.0 - threshold:
+                        n += 1
+                else:
+                    probs = torch.softmax(p, dim=-1)
+                    mx = probs.max(dim=-1).values
+                    n += int((mx < 1.0 - threshold).sum().item())
+        return n
+
+    def to_expr(self) -> str:
+        return _simplify(self._expr_at(self.root))
+
+    def _expr_at(self, idx: int) -> str:
+        n = self.nodes[idx]
+        if n["type"] == "leaf":
+            c = int(torch.argmax(self._params[n["key"]]).item())
+            return "1" if c == 0 else "x"
+        g = self._params[n["key"]]
+        lc = int(torch.argmax(g[0]).item())
+        rc = int(torch.argmax(g[1]).item())
+        left_expr = self._expr_at(n["left"])
+        right_expr = self._expr_at(n["right"])
+        return f"eml({_resolve_gate(lc, left_expr)}, {_resolve_gate(rc, right_expr)})"
+
+
+def _train_growing(
+    tree: "GrowingEMLTree",
+    x_data: torch.Tensor,
+    y_target: torch.Tensor,
+    opt: torch.optim.Optimizer,
+    search_iters: int,
+    hard_iters: int,
+    lr: float,
+    tau_search: float = 1.0,
+    tau_hard: float = 0.01,
+) -> float:
+    """Train a growing tree for a given iteration budget.
+
+    Mirrors `_train_one`'s two-phase schedule (search with fixed tau, then
+    hard anneal with entropy penalty) but operates on the dynamic tree.
+    Returns best MSE seen. Restores the best-seen state in-place.
+    """
+    best_loss = float("inf")
+    best_state = None
+    nan_restarts = 0
+    total = search_iters + hard_iters
+    for it in range(1, total + 1):
+        if nan_restarts > 20:
+            break
+
+        if it <= search_iters:
+            tau = tau_search
+            lam_ent = 0.0
+        else:
+            t = (it - search_iters) / max(1, hard_iters)
+            tau = tau_search * (tau_hard / tau_search) ** (t ** 2)
+            lam_ent = t * 0.01
+
+        opt.zero_grad()
+        pred, leaf_ps, _ = tree(x_data, tau=tau)
+        mse = torch.mean((pred - y_target).abs() ** 2).real
+
+        ent = torch.zeros((), dtype=REAL)
+        for lp in leaf_ps:
+            ent = ent - (lp * (lp + 1e-12).log()).sum()
+        if leaf_ps:
+            ent = ent / len(leaf_ps)
+        loss = mse + lam_ent * ent
+
+        if not torch.isfinite(loss):
+            nan_restarts += 1
+            if best_state is not None:
+                tree.load_state_dict(best_state)
+                opt = torch.optim.Adam(tree.parameters(), lr=lr)
+            continue
+
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(tree.parameters(), 1.0)
+        opt.step()
+
+        v = mse.item()
+        if np.isfinite(v) and v < best_loss:
+            best_loss = v
+            best_state = {k: t.clone() for k, t in tree.state_dict().items()}
+
+    if best_state is not None:
+        tree.load_state_dict(best_state)
+    return best_loss
+
+
+def discover_curriculum(
+    x: np.ndarray,
+    y: np.ndarray,
+    max_depth: int = 6,
+    n_tries: int = 8,
+    lr: float = 0.01,
+    verbose: bool = True,
+    success_threshold: float = 1e-10,
+) -> Optional[dict]:
+    """Discover a formula via curriculum learning: grow the tree incrementally.
+
+    Starts from a depth-1 tree. Trains to convergence. If the fit is not good
+    enough, splits the active leaf whose gradient magnitude is largest — the
+    split replaces it with `eml(x, 1) = exp(x)` — and resumes training. Repeats
+    until `max_depth` is reached or an exact formula is found.
+
+    This provides a warm start for depth-5 / depth-6 formulas that random
+    initialization cannot easily find (the paper reports 0% recovery at
+    depth 6 from random init).
+
+    Args:
+        x: input values (1D numpy array)
+        y: output values (1D numpy array, real or complex)
+        max_depth: maximum tree depth to grow to (default 6)
+        n_tries: independent curriculum runs with different seeds (default 8)
+        lr: Adam learning rate
+        verbose: print progress
+        success_threshold: MSE threshold for "exact" recovery
+
+    Returns:
+        dict with keys: expr, depth, snap_rmse, snapped_tree, n_splits, exact
+    """
+    x_t = torch.tensor(x, dtype=REAL)
+    y_t = torch.tensor(y, dtype=DTYPE)
+
+    best_overall = None
+
+    for seed in range(n_tries):
+        torch.manual_seed(seed)
+        tree = GrowingEMLTree()
+        opt = torch.optim.Adam(tree.parameters(), lr=lr)
+
+        if verbose:
+            print(f"\n─── curriculum seed {seed} ───")
+
+        def _finalize_and_check():
+            """Run one hard-anneal pass on a fresh copy and evaluate snap MSE.
+
+            Hard-annealing is destructive to the soft state we want to keep
+            growing from, so we do it on a deepcopy. Only the snapped tree
+            and its MSE are returned; `tree` itself stays soft.
+            """
+            import copy as _copy
+            scratch = _copy.deepcopy(tree)
+            scratch_opt = torch.optim.Adam(scratch.parameters(), lr=lr)
+            _train_growing(scratch, x_t, y_t, scratch_opt,
+                           search_iters=0, hard_iters=400, lr=lr)
+            snp = scratch.snap()
+            with torch.no_grad():
+                pred_s, _, _ = snp(x_t, tau=0.01)
+                mse_s = torch.mean((pred_s - y_t).abs() ** 2).real.item()
+            return snp, mse_s
+
+        # Initial train at depth 1 (search phase only — keep soft).
+        _train_growing(tree, x_t, y_t, opt,
+                       search_iters=600, hard_iters=0, lr=lr)
+
+        snapped, snap_mse = _finalize_and_check()
+        if verbose:
+            print(f"  depth {tree.current_depth()}: "
+                  f"snap_rmse={math.sqrt(max(snap_mse, 0)):.3e} "
+                  f"expr={snapped.to_expr()[:60]}")
+
+        grow_step = 0
+        # Cap to prevent runaway. A fully-grown depth-D tree has 2^D - 1
+        # internal nodes, so at most 2^D - 2 splits from the initial 1-node tree.
+        max_grow_steps = max(1, 2 ** max_depth - 2)
+
+        while (snap_mse >= success_threshold
+               and tree.current_depth() < max_depth
+               and grow_step < max_grow_steps):
+            grow_step += 1
+            # Pick leaf to split: largest gradient magnitude among leaves
+            # whose depth is still below max_depth.
+            grads = tree.leaf_gradient_magnitudes(x_t, y_t, tau=1.0)
+            splittable = {
+                i: g for i, g in grads.items()
+                if tree.depth_of_node(i) + 1 <= max_depth
+            }
+            if not splittable:
+                break
+            leaf_to_split = max(splittable, key=splittable.get)
+            tree.split_leaf(leaf_to_split)
+
+            # New params → fresh optimizer state. Old Adam state referenced
+            # dead params; re-initializing avoids stale-param issues.
+            opt = torch.optim.Adam(tree.parameters(), lr=lr)
+
+            # Search-phase training only. The tree stays soft until the
+            # final finalize call, so premature commitments to "1" or "x"
+            # don't lock down branches before they've been grown.
+            d = tree.current_depth()
+            _train_growing(
+                tree, x_t, y_t, opt,
+                search_iters=400 + 200 * d,
+                hard_iters=0,
+                lr=lr,
+            )
+
+            snapped, snap_mse = _finalize_and_check()
+            if verbose:
+                print(f"  split #{grow_step} → depth {d}: "
+                      f"snap_rmse={math.sqrt(max(snap_mse, 0)):.3e} "
+                      f"expr={snapped.to_expr()[:60]}")
+
+        result = {
+            "snapped": snapped,
+            "snap_mse": snap_mse,
+            "snap_rmse": math.sqrt(max(snap_mse, 0)),
+            "depth": tree.current_depth(),
+            "expr": snapped.to_expr(),
+            "n_uncertain": tree.n_uncertain(),
+            "n_splits": grow_step,
+            "seed": seed,
+        }
+
+        if snap_mse < success_threshold:
+            if verbose:
+                print(f"\n  ✓ Found exact formula "
+                      f"(seed {seed}, depth {result['depth']}, "
+                      f"splits={grow_step}): {result['expr']}")
+            return {
+                "expr": result["expr"],
+                "depth": result["depth"],
+                "snap_rmse": result["snap_rmse"],
+                "snapped_tree": result["snapped"],
+                "n_uncertain": result["n_uncertain"],
+                "n_splits": result["n_splits"],
+                "seed": seed,
+                "exact": True,
+            }
+
+        if best_overall is None or result["snap_mse"] < best_overall["snap_mse"]:
+            best_overall = result
+
+    if verbose:
+        print(f"\n  No exact formula found. "
+              f"Best: rmse={best_overall['snap_rmse']:.3e}")
+        print(f"  → {best_overall['expr'][:120]}")
+
+    return {
+        "expr": best_overall["expr"],
+        "depth": best_overall["depth"],
+        "snap_rmse": best_overall["snap_rmse"],
+        "snapped_tree": best_overall["snapped"],
+        "n_uncertain": best_overall["n_uncertain"],
+        "n_splits": best_overall["n_splits"],
+        "seed": best_overall["seed"],
+        "exact": False,
+    }
+
+
 # ─── CLI ───────────────────────────────────────────────────────
 
 def _demo():
@@ -546,5 +1081,32 @@ def _demo():
             print(f"  depth={result['depth']} rmse={result['snap_rmse']:.3e}")
 
 
+def _demo_curriculum():
+    """Demo: discover a deep formula via curriculum learning."""
+    print("═══ EML Symbolic Regression — Curriculum Growing ═══\n")
+
+    demos = [
+        ("exp(exp(x))",      lambda x: np.exp(np.exp(x)),         (-0.5, 1.0)),
+        ("exp(exp(exp(x)))", lambda x: np.exp(np.exp(np.exp(x))), (-1.0, 0.5)),
+        ("exp(x) - ln(x)",   lambda x: np.exp(x) - np.log(x),     (0.5, 3.0)),
+    ]
+
+    for name, fn, (lo, hi) in demos:
+        print(f"\n{'='*50}")
+        print(f"Target: y = {name}")
+        print(f"{'='*50}")
+        x = np.linspace(lo, hi, 30)
+        y = fn(x)
+        result = discover_curriculum(x, y, max_depth=4, n_tries=3, verbose=True)
+        if result:
+            print(f"\nResult: {result['expr']}")
+            print(f"  depth={result['depth']} splits={result['n_splits']} "
+                  f"rmse={result['snap_rmse']:.3e}")
+
+
 if __name__ == "__main__":
-    _demo()
+    import sys
+    if len(sys.argv) > 1 and sys.argv[1] == "curriculum":
+        _demo_curriculum()
+    else:
+        _demo()
