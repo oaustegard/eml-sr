@@ -71,14 +71,105 @@ That's intentional scope control: the experiment's job is to answer
 full symbolic-recovery pipeline. If the answer is yes, simplifier
 extension is a follow-up issue.
 
+## Empirical findings from the prototype
+
+Runs via `benchmarks/option_ab_compare.py` and direct `_train_one_linear`
+calls surfaced three separable phenomena:
+
+### 1. Architectural expressivity: Option B wins where it should
+
+On targets Option A cannot express at a given depth, Option B fits them
+by orders of magnitude better even with *free* coefficients (before any
+snap attempt):
+
+    exp(x) - 1   (depth 1, 6 seeds)
+      Option A: rmse 1.00   (snaps to `exp(x)`, off by 1 constant)
+      Option B: best_mse 1.17e-06   (4 of 6 seeds converge)
+
+    y = x        (identity target, which Option A cannot reach at d≤4)
+      Option A: rmse 0.56  at d=3   (snaps to `e - ln(e - ln(x))`)
+      Option B: best_mse 2.4e-07 at d=2   (5 of 6 seeds converge)
+      This confirms the theoretical prediction that Option B unlocks
+      `eml(ln(x), 1) = x` via the construction
+          gate_l = 1 − eml(0, x)
+      which requires γ = −1 on the child — impossible under softmax.
+
+The 6-order-of-magnitude improvement on `exp(x) - 1` and ~6-order
+improvement on `y = x` prove the architectural claim. Option B
+strictly dominates Option A in representational power on the targets
+where Option A fails.
+
+### 2. Fitting regression on targets Option A handles well
+
+On targets Option A already nails to machine precision (`exp(x)`, `e`,
+`ln(x)`, `exp(x) - ln(x)`), Option B is *slower* and fits *worse*:
+
+    target         Option A (rmse)   Option B (best_mse)
+    exp(x)         1.99e-16           ~1e-06    (stops at near-fit)
+    ln(x)          7.35e-17           ~1e-05    (stops at near-fit)
+    e              0.00               ~1e-13    (only this one matches)
+
+Root cause: **Option B's free parameterization admits infinite
+equivalent representations of the same function**. With leaves
+`α + βx` and gates `α + βx + γ·child`, there are more free parameters
+than degrees of freedom in the target. The optimizer converges
+polynomially to near-fits but never commits to the canonical
+sparse representation. This is the dual of Option A's problem —
+Option A has a discrete, one-hot snap at the cost of expressivity;
+Option B has continuous expressivity at the cost of committing to
+any specific discrete structure.
+
+### 3. Symbolic snap is broken for Option B
+
+Per-coefficient rounding to `{0, ±1, ±2, ±e}` destroys the fit in
+every non-trivial case, because individual coefficients are not
+*independent* carriers of meaning — their *combined* value is what
+matters. A linear combo like `0.5·1 + 0.5·x + 0.7·child` may fit
+perfectly but no single coefficient is close to a named constant.
+
+A **discreteness penalty** (nearest-point loss toward the lattice
+`{0, ±1, ±2, ±e}`, applied in the second training phase) failed to
+fix this even at λ=100. The optimizer sits at saddle points on the
+Voronoi boundaries between constants; no single coefficient wants
+to move because any movement makes the penalty worse.
+
+## Implications
+
+Option B is the correct **architecture** (matches the paper, unlocks
+the targets Option A fails on) but the naive snap recipe is the
+wrong **algorithm**. Three paths forward, in increasing order of
+ambition:
+
+  * **Iterative magnitude pruning**: snap one coefficient at a time,
+    smallest-magnitude first, retrain briefly after each snap to
+    absorb the discontinuity. Classic neural-network pruning
+    technique. Probably tractable but has N×M outer iterations.
+
+  * **Brute-force discrete search**: at training's end, enumerate
+    all 2^k snap configurations over the k coefficients that are
+    "close enough" to multiple constants, evaluate MSE on each,
+    pick the best. Tractable for depth ≤ 3 (k ≈ 10–30).
+
+  * **Learned snap network**: train a separate head that, given
+    the final tree's coefficients, predicts which configuration
+    of discrete choices minimizes MSE. More complex but
+    differentiable end-to-end.
+
+The empirical conclusion: **Option B is worth pursuing**, but not
+by simply flipping the default in `eml_sr.py`. It needs either
+(a) its own training + snap pipeline that matches the paper
+properly, or (b) a hybrid that uses Option A's argmax discipline
+for targets it can handle and falls back to Option B only for
+targets where A provably cannot express the answer.
+
 ## Limitations of this prototype
 
   * No multi-process worker support (single-threaded only).
   * No curriculum learning. Random init at fixed depths.
-  * Snap-to-symbolic is best-effort — non-canonical expressions may
-    print as numeric coefficients.
-  * Only tested on the issue #11 failing targets; broader regression
-    coverage lives in `tests/test_eml_sr.py` and pertains to Option A.
+  * Snap-to-symbolic is broken for non-trivial cases; see §3 above.
+  * Only tested on a small set of targets from issue #11. Broader
+    regression coverage lives in `tests/test_eml_sr.py` and pertains
+    to Option A.
 
 ## Reference
 

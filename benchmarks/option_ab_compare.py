@@ -56,14 +56,14 @@ TARGETS = [
 ]
 
 
-def _option_a(name, fn, lo, hi, max_depth, n_tries=4):
+def _option_a(name, fn, lo, hi, max_depth, n_tries=3):
     x = np.linspace(lo, hi, 30)
     y = fn(x)
     t0 = time.time()
     r = discover(x, y, max_depth=max_depth, n_tries=n_tries, verbose=False)
     elapsed = time.time() - t0
     return {
-        "best_mse": r["snap_rmse"] ** 2,  # discover() reports normalized rmse
+        "best_mse": r["snap_rmse"] ** 2,
         "snap_rmse": r["snap_rmse"],
         "expr": r["expr"],
         "depth": r["depth"],
@@ -71,9 +71,9 @@ def _option_a(name, fn, lo, hi, max_depth, n_tries=4):
     }
 
 
-def _option_b(name, fn, lo, hi, max_depth, n_tries=4):
-    """Option B: try each depth from 1 to max_depth, n_tries seeds each.
-    Return the best (smallest best_mse) result found."""
+def _option_b(name, fn, lo, hi, max_depth, n_tries=3):
+    """Option B: try each depth 1..max_depth, n_tries seeds each.
+    Return the best (smallest best_mse) result."""
     x = np.linspace(lo, hi, 30)
     y = fn(x)
     xt = torch.tensor(x, dtype=REAL)
@@ -85,19 +85,17 @@ def _option_b(name, fn, lo, hi, max_depth, n_tries=4):
         for seed in range(n_tries):
             r = _train_one_linear(
                 xt, yt, depth=depth, seed=seed,
-                search_iters=3000, snap_iters=1000,
+                search_iters=1500, snap_iters=500,
                 lam_disc_max=0.5, lr=0.01,
             )
             r["depth"] = depth
             if best is None or r["best_mse"] < best["best_mse"]:
                 best = r
-        # Early-exit: if we found a near-perfect fit at this depth, stop.
+        # Early-exit: near-perfect fit already.
         if best and best["best_mse"] < 1e-8:
             break
     elapsed = time.time() - t0
 
-    # Compute RMSE in the same coordinate space as Option A reports
-    # (target space, since neither method normalizes here).
     with torch.no_grad():
         pred, _, _ = best["tree"](xt)
         fit_rmse = float(np.sqrt(np.mean((pred.real.numpy() - y) ** 2)))
@@ -113,34 +111,37 @@ def _option_b(name, fn, lo, hi, max_depth, n_tries=4):
 
 
 def run():
-    print("═══ Option A (softmax) vs Option B (linear coeffs) ═══\n")
-    print(f"  {'target':18s}  {'A.fit':>10s}  {'A.depth':>8s}  "
-          f"{'B.fit':>10s}  {'B.snap':>10s}  {'B.depth':>8s}  notes")
-    print("  " + "─" * 95)
+    print("═══ Option A (softmax) vs Option B (linear coeffs) ═══\n", flush=True)
+    print(f"  {'target':18s}  {'A.fit':>10s}  {'A.d':>3s}  "
+          f"{'B.fit':>10s}  {'B.snap':>10s}  {'B.d':>3s}  "
+          f"{'tA':>5s}  {'tB':>5s}  notes", flush=True)
+    print("  " + "─" * 100, flush=True)
 
     for name, fn, (lo, hi), max_d_a, max_d_b in TARGETS:
-        ra = _option_a(name, fn, lo, hi, max_depth=max(max_d_a, 4))
-        rb = _option_b(name, fn, lo, hi, max_depth=max(max_d_b, 3))
+        # Per-target depth caps — don't waste time running deep ladders
+        # on targets we know stay shallow.
+        ra = _option_a(name, fn, lo, hi, max_depth=max_d_a)
+        rb = _option_b(name, fn, lo, hi, max_depth=max_d_b)
 
         a_fit = ra["snap_rmse"]
         b_fit = rb["fit_rmse"]
         b_snap = rb["snap_rmse"]
         winner = "B" if b_fit < a_fit / 10 else ("A" if a_fit < b_fit / 10 else "tie")
-        print(f"  {name:18s}  {a_fit:10.2e}  {ra['depth']:>8}  "
-              f"{b_fit:10.2e}  {b_snap:10.2e}  {rb['depth']:>8}  "
-              f"winner={winner}")
+        print(f"  {name:18s}  {a_fit:10.2e}  {ra['depth']:>3}  "
+              f"{b_fit:10.2e}  {b_snap:10.2e}  {rb['depth']:>3}  "
+              f"{ra['elapsed']:5.1f}  {rb['elapsed']:5.1f}  "
+              f"winner={winner}", flush=True)
 
-    print()
-    print("Legend:")
-    print("  A.fit  = Option A snap RMSE (clean argmax snap → final answer)")
-    print("  B.fit  = Option B *pre-snap* RMSE (numerical fit only)")
-    print("  B.snap = Option B *post-snap* RMSE (lossy per-coef snap; future work)")
-    print()
-    print("The interesting question is `B.fit` vs `A.fit` — that measures")
-    print("the architectural expressivity gap. `B.snap` being worse than `B.fit`")
-    print("just means our naive per-coefficient snap is broken; a smarter snap")
-    print("(iterative pruning, brute-force discrete search, learned snap)")
-    print("is the obvious follow-up.")
+    print(flush=True)
+    print("Legend:", flush=True)
+    print("  A.fit  = Option A post-snap RMSE (clean argmax snap = final answer)", flush=True)
+    print("  B.fit  = Option B *pre-snap* RMSE (numerical fit only)", flush=True)
+    print("  B.snap = Option B *post-snap* RMSE (per-coef rounding, lossy)", flush=True)
+    print("  tA/tB  = wall clock seconds", flush=True)
+    print(flush=True)
+    print("The interesting comparison is `B.fit` vs `A.fit` — that measures", flush=True)
+    print("the *architectural* expressivity gap. `B.snap` being worse than", flush=True)
+    print("`B.fit` just means the naive per-coefficient snap is broken.", flush=True)
 
 
 if __name__ == "__main__":
