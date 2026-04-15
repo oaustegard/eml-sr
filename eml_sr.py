@@ -430,6 +430,7 @@ def discover(
     n_tries: int = 16,
     verbose: bool = True,
     success_threshold: float = 1e-10,
+    n_workers: int = 1,
 ) -> Optional[dict]:
     """Discover a formula relating x → y.
 
@@ -443,6 +444,10 @@ def discover(
         n_tries: random seeds per depth (default 16)
         verbose: print progress
         success_threshold: MSE threshold for "exact" recovery
+        n_workers: parallel worker processes per depth (default 1 = serial).
+            Set to a value <= os.cpu_count() to fan out independent seeds
+            across cores. ~Linear speedup; the per-depth phase still has
+            to wait for its slowest seed before moving to the next depth.
 
     Returns:
         dict with keys: expr, depth, snap_rmse, snapped_tree
@@ -462,18 +467,20 @@ def discover(
         s_iters = 300 + depth * 400
         h_iters = 100 + depth * 150
         if verbose:
-            print(f"\n─── depth {depth} ({n_leaves} leaves, {n_params} params, {n_tries} seeds) ───")
+            wtag = f", workers={n_workers}" if n_workers > 1 else ""
+            print(f"\n─── depth {depth} ({n_leaves} leaves, {n_params} params, "
+                  f"{n_tries} seeds{wtag}) ───")
 
         best_at_depth = None
         n_success = 0
 
-        for seed in range(n_tries):
-            result = _train_one(
-                x_t, y_t, depth, seed,
-                search_iters=s_iters,
-                hard_iters=h_iters,
-                verbose=False,
-            )
+        train_kwargs = dict(
+            search_iters=s_iters,
+            hard_iters=h_iters,
+            verbose=False,
+        )
+        for seed, result in _run_seeds(x_t, y_t, depth, n_tries,
+                                       train_kwargs, n_workers):
 
             if verbose and (seed < 3 or result["snap_rmse"] < 1e-5):
                 tag = " ✓" if result["snap_mse"] < success_threshold else ""
@@ -1056,6 +1063,152 @@ def discover_curriculum(
     }
 
 
+# ─── Data normalization ────────────────────────────────────────
+#
+# EML chains overflow easily — a single eml(x, y) is exp(x) − ln(y), so any
+# input outside roughly [-30, 30] sends the partial down the clamp path
+# (1e300) and kills gradients. For real-world CSV data we need to map x and
+# y into a numerically friendly range first, train in that space, then
+# (optionally) report the transformations alongside the discovered formula.
+#
+# Two transforms are supported:
+#   "minmax"   — affine map onto [target_lo, target_hi] (default [-1, 1])
+#   "standard" — zero-mean, unit-variance
+#   "none"     — pass-through (use only if data is already well scaled)
+#
+# Both are *affine*, x' = a·x + b, y' = c·y + d, so the discovered formula
+# in primed coordinates can be back-substituted by hand: y = (f(a·x + b) − d)/c.
+# We don't try to do that algebraically — most non-linear EML expressions
+# don't simplify cleanly under affine substitution.
+
+
+class Normalizer:
+    """Affine normalizer with invertible transform/inverse for x and y.
+
+    Stored as a plain dict-friendly object so it can be pickled into pool
+    workers and serialized alongside results.
+    """
+
+    def __init__(self, x_a: float, x_b: float, y_a: float, y_b: float, mode: str):
+        # x' = x_a * x + x_b   ;   y' = y_a * y + y_b
+        self.x_a = float(x_a)
+        self.x_b = float(x_b)
+        self.y_a = float(y_a)
+        self.y_b = float(y_b)
+        self.mode = mode
+
+    @classmethod
+    def fit(cls, x: np.ndarray, y: np.ndarray, mode: str = "minmax",
+            target_lo: float = -1.0, target_hi: float = 1.0) -> "Normalizer":
+        x = np.asarray(x, dtype=np.float64)
+        y = np.asarray(y, dtype=np.float64)
+        if mode == "none":
+            return cls(1.0, 0.0, 1.0, 0.0, mode)
+        if mode == "minmax":
+            def _ab(v):
+                lo, hi = float(v.min()), float(v.max())
+                if hi == lo:
+                    return 0.0, 0.0  # constant column collapses to 0
+                a = (target_hi - target_lo) / (hi - lo)
+                b = target_lo - a * lo
+                return a, b
+            xa, xb = _ab(x)
+            ya, yb = _ab(y)
+            return cls(xa, xb, ya, yb, mode)
+        if mode == "standard":
+            def _ab(v):
+                mu = float(v.mean())
+                sd = float(v.std())
+                if sd < 1e-12:
+                    return 0.0, 0.0
+                return 1.0 / sd, -mu / sd
+            xa, xb = _ab(x)
+            ya, yb = _ab(y)
+            return cls(xa, xb, ya, yb, mode)
+        raise ValueError(f"unknown normalization mode: {mode!r}")
+
+    def transform_x(self, x):
+        return self.x_a * x + self.x_b
+
+    def transform_y(self, y):
+        return self.y_a * y + self.y_b
+
+    def inverse_x(self, xp):
+        return (xp - self.x_b) / self.x_a if self.x_a != 0 else np.zeros_like(xp)
+
+    def inverse_y(self, yp):
+        return (yp - self.y_b) / self.y_a if self.y_a != 0 else np.zeros_like(yp)
+
+    def describe(self) -> str:
+        return (f"x' = {self.x_a:.6g} * x + {self.x_b:.6g}   "
+                f"y' = {self.y_a:.6g} * y + {self.y_b:.6g}   "
+                f"(mode={self.mode})")
+
+    def to_dict(self) -> dict:
+        return {"x_a": self.x_a, "x_b": self.x_b,
+                "y_a": self.y_a, "y_b": self.y_b, "mode": self.mode}
+
+
+# ─── Parallel seed training ────────────────────────────────────
+#
+# The biggest perf opportunity in `discover()` is that all `n_tries` seeds
+# at a given depth are independent. The single-process loop runs them
+# sequentially even though a modern box has 8+ cores sitting idle. Running
+# each seed in its own worker process gives near-linear speedup as long as
+# we (a) cap each worker to a single torch thread to avoid oversubscription,
+# and (b) use `fork` so we don't pay the import-torch tax in every worker.
+#
+# Tradeoffs:
+#   - Workers can't short-circuit each other when one finds an exact fit;
+#     the depth still completes its full batch. Net effect is still a big
+#     win because the cost-per-seed is what dominates.
+#   - The result dict (which embeds two nn.Module trees) pickles cleanly,
+#     just bulkier than a scalar payload — usually a few hundred KB.
+#   - If `n_workers <= 1`, we run inline and skip the pool entirely.
+
+
+def _train_one_worker(packed):
+    """Pickle-safe trampoline so a multiprocessing.Pool can call _train_one.
+
+    Each worker is its own Python interpreter; we cap torch threads to 1 so
+    `n_workers` workers don't all try to grab every core at once.
+    """
+    import torch as _torch
+    _torch.set_num_threads(1)
+    x_arr, y_arr, depth, seed, kwargs = packed
+    x_t = _torch.tensor(x_arr, dtype=REAL)
+    y_t = _torch.tensor(y_arr, dtype=DTYPE)
+    return _train_one(x_t, y_t, depth, seed, **kwargs)
+
+
+def _run_seeds(x_t, y_t, depth, n_tries, train_kwargs, n_workers):
+    """Run `n_tries` independent seeds at `depth`, optionally in parallel.
+
+    Yields each (seed, result) in submission order so the caller can apply
+    its own early-stop logic.
+    """
+    if n_workers and n_workers > 1:
+        import multiprocessing as mp
+        # `fork` is much faster than `spawn` on Linux — children inherit the
+        # parent process image instead of re-importing torch from scratch.
+        # Caveat: forking after libgomp/libmkl have spun up worker threads
+        # is occasionally flaky, hence OMP_NUM_THREADS=1 + torch.set_num_threads(1)
+        # in the worker.
+        try:
+            ctx = mp.get_context("fork")
+        except ValueError:
+            ctx = mp.get_context("spawn")
+        x_arr = x_t.detach().cpu().numpy()
+        y_arr = y_t.detach().cpu().numpy()
+        packed = [(x_arr, y_arr, depth, s, train_kwargs) for s in range(n_tries)]
+        with ctx.Pool(min(n_workers, n_tries)) as pool:
+            for s, result in enumerate(pool.imap(_train_one_worker, packed)):
+                yield s, result
+    else:
+        for s in range(n_tries):
+            yield s, _train_one(x_t, y_t, depth, s, **train_kwargs)
+
+
 # ─── CLI ───────────────────────────────────────────────────────
 
 def _demo():
@@ -1104,9 +1257,168 @@ def _demo_curriculum():
                   f"rmse={result['snap_rmse']:.3e}")
 
 
+def discover_csv(
+    csv_path: str,
+    x_col: str,
+    y_col: str,
+    max_depth: int = 4,
+    n_tries: int = 16,
+    method: str = "discover",
+    normalize: str = "minmax",
+    n_workers: int = 1,
+    verbose: bool = True,
+    success_threshold: float = 1e-10,
+) -> dict:
+    """Read (x, y) from a CSV and run symbolic regression.
+
+    The discovered formula is in *normalized* coordinates — see the
+    `normalizer` field of the returned dict for the affine transform that
+    was applied. Predictions on new data must be normalized first.
+
+    Args:
+        csv_path: path to a CSV file
+        x_col: column name for the independent variable
+        y_col: column name for the dependent variable
+        max_depth: maximum tree depth to search
+        n_tries: random seeds per depth (or per curriculum run)
+        method: "discover" (fixed-depth ladder) or "curriculum" (growing tree)
+        normalize: "minmax" | "standard" | "none"
+        n_workers: parallel seed workers (only used by `discover`)
+        verbose: print progress
+        success_threshold: MSE threshold for "exact" recovery
+
+    Returns:
+        Result dict from discover()/discover_curriculum() augmented with:
+          - normalizer: the Normalizer used
+          - x_col, y_col: column names
+          - n_samples: number of rows
+    """
+    import pandas as pd
+    df = pd.read_csv(csv_path)
+    if x_col not in df.columns:
+        raise ValueError(f"x column {x_col!r} not in {list(df.columns)}")
+    if y_col not in df.columns:
+        raise ValueError(f"y column {y_col!r} not in {list(df.columns)}")
+    sub = df[[x_col, y_col]].dropna()
+    x = sub[x_col].to_numpy(dtype=np.float64)
+    y = sub[y_col].to_numpy(dtype=np.float64)
+
+    norm = Normalizer.fit(x, y, mode=normalize)
+    x_n = norm.transform_x(x)
+    y_n = norm.transform_y(y)
+
+    if verbose:
+        print(f"Loaded {len(x)} rows from {csv_path}")
+        print(f"  x={x_col}: [{x.min():.6g}, {x.max():.6g}]   "
+              f"y={y_col}: [{y.min():.6g}, {y.max():.6g}]")
+        print(f"Normalizer: {norm.describe()}")
+        print(f"  x' range: [{x_n.min():.6g}, {x_n.max():.6g}]   "
+              f"y' range: [{y_n.min():.6g}, {y_n.max():.6g}]")
+
+    if method == "curriculum":
+        result = discover_curriculum(
+            x_n, y_n,
+            max_depth=max_depth, n_tries=n_tries,
+            verbose=verbose, success_threshold=success_threshold,
+        )
+    elif method == "discover":
+        result = discover(
+            x_n, y_n,
+            max_depth=max_depth, n_tries=n_tries,
+            verbose=verbose, success_threshold=success_threshold,
+            n_workers=n_workers,
+        )
+    else:
+        raise ValueError(f"unknown method {method!r}; pick 'discover' or 'curriculum'")
+
+    if result is None:
+        return {"normalizer": norm, "x_col": x_col, "y_col": y_col,
+                "n_samples": len(x), "expr": None}
+
+    result["normalizer"] = norm
+    result["x_col"] = x_col
+    result["y_col"] = y_col
+    result["n_samples"] = len(x)
+    return result
+
+
+def _cli_csv(args):
+    """Handler for the `csv` subcommand."""
+    import time
+    t0 = time.time()
+    result = discover_csv(
+        csv_path=args.csv,
+        x_col=args.x_col,
+        y_col=args.y_col,
+        max_depth=args.max_depth,
+        n_tries=args.tries,
+        method=args.method,
+        normalize=args.normalize,
+        n_workers=args.workers,
+        verbose=not args.quiet,
+        success_threshold=args.threshold,
+    )
+    elapsed = time.time() - t0
+
+    print()
+    print("═" * 60)
+    print("Result")
+    print("═" * 60)
+    if result.get("expr") is None:
+        print("No formula found.")
+        return
+    print(f"  formula (in normalized coords):  y' = {result['expr']}")
+    print(f"  depth                            {result['depth']}")
+    print(f"  snap rmse                        {result['snap_rmse']:.3e}")
+    print(f"  exact recovery                   {result.get('exact', True)}")
+    print(f"  uncertain weights                {result.get('n_uncertain', 0)}")
+    print(f"  elapsed                          {elapsed:.2f}s")
+    norm = result["normalizer"]
+    print(f"  normalizer                       {norm.describe()}")
+    print()
+    print("To recover the original formula, substitute:")
+    print(f"  x' = {norm.x_a:.6g} * {args.x_col} + {norm.x_b:.6g}")
+    print(f"  y' = {norm.y_a:.6g} * {args.y_col} + {norm.y_b:.6g}")
+    print(f"  → {args.y_col} = (formula({args.x_col}) - {norm.y_b:.6g}) / {norm.y_a:.6g}")
+
+
+def _build_parser():
+    import argparse
+    p = argparse.ArgumentParser(
+        prog="eml_sr",
+        description="EML symbolic regression — discover elementary formulas from data.",
+    )
+    sub = p.add_subparsers(dest="cmd")
+
+    sub.add_parser("demo", help="Run the built-in fixed-depth demo")
+    sub.add_parser("curriculum", help="Run the built-in curriculum-growing demo")
+
+    pc = sub.add_parser("csv", help="Discover a formula from a CSV file")
+    pc.add_argument("csv", help="Path to CSV file")
+    pc.add_argument("--x-col", required=True, help="Column name for the input variable")
+    pc.add_argument("--y-col", required=True, help="Column name for the output variable")
+    pc.add_argument("--max-depth", type=int, default=4, help="Maximum tree depth (default 4)")
+    pc.add_argument("--tries", type=int, default=16, help="Seeds per depth (default 16)")
+    pc.add_argument("--method", choices=["discover", "curriculum"], default="discover",
+                    help="Search method (default discover)")
+    pc.add_argument("--normalize", choices=["minmax", "standard", "none"],
+                    default="minmax", help="Data normalization (default minmax)")
+    pc.add_argument("--workers", type=int, default=1,
+                    help="Parallel seed workers (default 1; set to ncpu for speedup)")
+    pc.add_argument("--threshold", type=float, default=1e-10,
+                    help="MSE threshold for 'exact' recovery (default 1e-10)")
+    pc.add_argument("--quiet", action="store_true", help="Suppress progress output")
+    pc.set_defaults(func=_cli_csv)
+    return p
+
+
 if __name__ == "__main__":
     import sys
-    if len(sys.argv) > 1 and sys.argv[1] == "curriculum":
+    parser = _build_parser()
+    args = parser.parse_args()
+    if args.cmd == "demo" or args.cmd is None:
+        _demo()
+    elif args.cmd == "curriculum":
         _demo_curriculum()
     else:
-        _demo()
+        args.func(args)

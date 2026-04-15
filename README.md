@@ -64,11 +64,80 @@ This is analogous to Net2Net / progressive growing in neural architecture
 search. It solves nested compositions like `exp(exp(exp(x)))` several times
 faster than random init, and lets shallow solutions seed deeper ones.
 
+## CSV ingestion
+
+Run eml-sr against any two-column CSV from the command line:
+
+```bash
+python eml_sr.py csv data.csv --x-col time --y-col temperature \
+    --max-depth 5 --tries 16 --workers 8
+```
+
+Options:
+- `--method {discover,curriculum}` — fixed-depth ladder vs growing tree
+- `--normalize {minmax,standard,none}` — affine pre-scaling (EML overflows
+  on un-scaled data; `minmax` is the safest default)
+- `--workers N` — parallel seed processes for `discover` (~linear speedup)
+
+The discovered formula is reported in normalized coordinates along with
+the affine transformation needed to convert it back. Use `--normalize none`
+when your data is already in a numerically friendly range — that's the
+only setting that yields a directly-readable formula in the original units.
+
+## sklearn interface (for SRBench)
+
+`EMLRegressor` exposes the standard `fit`/`predict` API plus the `model_`
+attribute SRBench (La Cava et al. 2021) reads to extract the symbolic
+expression:
+
+```python
+from eml_sr_sklearn import EMLRegressor
+
+est = EMLRegressor(max_depth=4, n_tries=16, n_workers=8)
+est.fit(X, y)
+yhat = est.predict(X_test)
+print(est.model_)            # symbolic form in normalized coords
+print(est.original_model_)   # with the affine substitution stitched in
+```
+
+When `X` has multiple columns, `EMLRegressor` projects onto the column with
+the highest absolute Spearman correlation with `y`. This puts eml-sr on the
+SRBench leaderboard for univariate / near-univariate problems, while
+flagging cleanly that the engine is single-variable by construction.
+
+## Feynman benchmark
+
+A curated set of univariate slices from the AI Feynman dataset
+([Udrescu & Tegmark 2020](https://github.com/SJ001/AI-Feynman)) lives in
+`benchmarks/feynman.py`:
+
+```bash
+python -m benchmarks.feynman --workers 8                # quick (8 problems)
+python -m benchmarks.feynman --all --method curriculum  # full suite
+```
+
+Each problem reports recovery success, RMSE, depth used, and time to solution.
+
+## Performance
+
+- **`n_workers > 1`**: `discover()` accepts an `n_workers` argument that
+  fans out per-depth seeds across worker processes. Each child process is
+  pinned to a single torch thread to avoid oversubscription. Empirical
+  speedup is near-linear up to `os.cpu_count()`.
+- **Normalization**: pre-scaling with `Normalizer.fit(x, y, mode="minmax")`
+  prevents the `exp(x)` chain inside the EML tree from saturating to the
+  1e300 clamp, which would otherwise kill gradients on real-world data.
+- **Curriculum**: for deep formulas, `discover_curriculum` warm-starts
+  by growing the tree leaf-by-leaf, dramatically beating random init
+  past depth 4.
+
 ## Files
 
 | File | Description |
 |------|-------------|
-| `eml_sr.py` | Symbolic regression engine (the product) |
+| `eml_sr.py` | Symbolic regression engine + CLI (the product) |
+| `eml_sr_sklearn.py` | sklearn-style `EMLRegressor` for SRBench |
+| `benchmarks/feynman.py` | Univariate Feynman-equation benchmark |
 | `legacy/eml_executor.mojo` | Original parabolic-attention stack machine (archived) |
 | `legacy/test_eml.mojo` | 109-test bootstrap chain verification (archived) |
 
