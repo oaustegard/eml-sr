@@ -27,17 +27,20 @@ random init. The current selection keeps:
   - exp / ln chains (EML's natural wheelhouse)
   - The depth-1 EML shape eml(x, x) = exp(x) - ln(x)
 
-The defaults were also flipped to `--method curriculum --normalize standard`
-since min-max normalization to [-1, 1] flattens curvature and pushes the
-optimizer into the `(exp(x) - 1)` local minimum for almost every nonlinear
-target. See issue #11 for the full diagnosis.
+The defaults were also flipped to `--method curriculum --normalize none`.
+Both `minmax` and `standard` normalization destroy symbolic recoverability
+for nonlinear targets — the affine transform of an elementary function is
+generally not itself elementary in the EML vocabulary, so the engine ends
+up fitting an unreachable shape. The runner now reports RMSE in *original*
+coordinate space (not normalized space, as the original implementation
+did, which was misleading). See issue #11 for the full diagnosis.
 
 Usage::
 
     python -m benchmarks.feynman                  # quick: 8 problems
     python -m benchmarks.feynman --all            # all problems
     python -m benchmarks.feynman --workers 8      # parallel seeds
-    python -m benchmarks.feynman --method discover --normalize minmax
+    python -m benchmarks.feynman --normalize minmax  # for huge y ranges
 """
 
 from __future__ import annotations
@@ -49,13 +52,14 @@ from dataclasses import dataclass
 from typing import Callable, Optional
 
 import numpy as np
+import torch
 
 # Allow running as a script from the repo root or as `python -m benchmarks.feynman`.
 import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from eml_sr import discover, discover_curriculum, Normalizer  # noqa: E402
+from eml_sr import REAL, discover, discover_curriculum, Normalizer  # noqa: E402
 
 
 # ─── Problem catalogue ─────────────────────────────────────────
@@ -199,22 +203,42 @@ def _run_one(prob: FeynmanProblem, *, max_depth: int, n_tries: int,
 
     if result is None:
         return {"prob": prob, "ok": False, "expr": None, "elapsed": elapsed,
-                "rmse": float("inf"), "depth": None}
+                "rmse": float("inf"), "rmse_norm": float("inf"), "depth": None}
+
+    # Recompute RMSE in *original* coordinate space — `result["snap_rmse"]`
+    # is reported in normalized space, which is misleading: an affine
+    # transform of an elementary target (minmax/standard) is generally
+    # not itself elementary in the EML vocabulary, so a perfect-RMSE fit
+    # in normalized space corresponds to a *bad* fit in original space.
+    # Issue #11 documents the implications.
+    snapped = result.get("snapped_tree")
+    rmse_orig = float("inf")
+    if snapped is not None:
+        with torch.no_grad():
+            pred_n, _, _ = snapped(torch.tensor(x_n, dtype=REAL), tau=0.01)
+            pred_n_np = pred_n.real.detach().numpy()
+            pred_orig = norm.inverse_y(pred_n_np)
+            rmse_orig = float(np.sqrt(np.mean((pred_orig - y) ** 2)))
 
     return {
         "prob": prob,
         "ok": bool(result.get("exact", True)),
         "expr": result["expr"],
-        "rmse": result["snap_rmse"],
+        "rmse": rmse_orig,
+        "rmse_norm": result["snap_rmse"],
         "depth": result["depth"],
         "elapsed": elapsed,
         "normalizer": norm,
     }
 
 
-def _fmt_row(r: dict) -> str:
+def _fmt_row(r: dict, threshold: float) -> str:
     p = r["prob"]
-    ok = "✓" if r["ok"] else " "
+    # Recovery is "ok" only when the original-space RMSE is below threshold.
+    # The discover()-internal "exact" flag is computed against the
+    # normalized-space MSE which can be misleading (issue #11).
+    is_ok = math.isfinite(r["rmse"]) and r["rmse"] < threshold
+    ok = "✓" if is_ok else " "
     rmse = "—" if not math.isfinite(r["rmse"]) else f"{r['rmse']:.2e}"
     depth = "—" if r["depth"] is None else str(r["depth"])
     expr = (r["expr"] or "<no formula>")[:42]
@@ -225,6 +249,7 @@ def _fmt_row(r: dict) -> str:
 def run(quick: bool = True, **kwargs) -> list:
     """Run the Feynman benchmark and return a list of result dicts."""
     problems = PROBLEMS[:8] if quick else PROBLEMS
+    threshold = kwargs.get("threshold", 1e-6)
 
     print(f"═══ Feynman benchmark — {len(problems)} problems "
           f"({kwargs.get('method', 'discover')}, "
@@ -238,9 +263,13 @@ def run(quick: bool = True, **kwargs) -> list:
     for prob in problems:
         r = _run_one(prob, **kwargs)
         results.append(r)
-        print(_fmt_row(r))
+        # RMSE in the printed row is now in *original* coordinate space
+        # (issue #11). Recovery counts only succeed when that original-space
+        # RMSE is below the user-supplied threshold.
+        print(_fmt_row(r, threshold=threshold))
 
-    n_ok = sum(1 for r in results if r["ok"])
+    n_ok = sum(1 for r in results
+               if math.isfinite(r["rmse"]) and r["rmse"] < threshold)
     print()
     print(f"  exact recovery:  {n_ok}/{len(results)}  "
           f"({100*n_ok/len(results):.0f}%)")
@@ -253,13 +282,19 @@ def main():
     p.add_argument("--all", action="store_true", help="Run all problems (else first 8)")
     p.add_argument("--max-depth", type=int, default=4)
     p.add_argument("--tries", type=int, default=8)
-    # Defaults retuned in issue #11: curriculum + standard normalization
-    # recover meaningfully more nonlinear targets than the original
-    # discover + minmax pairing.
+    # Defaults retuned in issue #11. Key finding: ANY normalization (minmax
+    # or standard) destroys symbolic recoverability for nonlinear targets,
+    # because the affine transform of an elementary function is generally
+    # not itself elementary in the EML vocabulary. The trimmed catalog uses
+    # modest x ranges so `none` does not overflow the EML clamp. Use
+    # `--normalize minmax` only when the y range spans many decades.
     p.add_argument("--method", choices=["discover", "curriculum"], default="curriculum")
-    p.add_argument("--normalize", choices=["minmax", "standard", "none"], default="standard")
+    p.add_argument("--normalize", choices=["minmax", "standard", "none"], default="none")
     p.add_argument("--workers", type=int, default=1)
-    p.add_argument("--threshold", type=float, default=1e-10)
+    # Threshold is on *original-space* RMSE, not normalized-space MSE.
+    # 1e-6 is the threshold for "exactly recovered" given float64 precision
+    # over reasonable y-magnitudes; anything higher is an approximation.
+    p.add_argument("--threshold", type=float, default=1e-6)
     args = p.parse_args()
 
     run(
