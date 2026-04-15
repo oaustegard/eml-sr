@@ -41,6 +41,29 @@ AST rewriter that applies EML identities (e.g. `eml(1, eml(eml(1, x), 1)) → ln
 | `ln(x)` | 3 | 7.3e-17 |
 | `exp(x) - ln(x)` | 1 | 3.2e-16 |
 
+## Curriculum learning (growing trees)
+
+At deep depths, random initialization becomes a needle-in-a-haystack search —
+the paper reports 0% recovery at depth 6 from random init. `discover_curriculum`
+grows the tree one leaf at a time as a warm start:
+
+1. Start at depth 1 (1 internal node, 2 leaves)
+2. Train to convergence
+3. If the fit isn't good enough, pick the leaf with the largest gradient
+   magnitude (the one most "wanting" to change) and split it — replacing it
+   with an `eml(x, 1) = exp(x)` subtree, and biasing the parent gate to
+   route through the new subtree
+4. Continue training and repeat until `max_depth` or exact recovery
+
+```python
+from eml_sr import discover_curriculum
+result = discover_curriculum(x, y, max_depth=6, n_tries=8)
+```
+
+This is analogous to Net2Net / progressive growing in neural architecture
+search. It solves nested compositions like `exp(exp(exp(x)))` several times
+faster than random init, and lets shallow solutions seed deeper ones.
+
 ## Files
 
 | File | Description |
