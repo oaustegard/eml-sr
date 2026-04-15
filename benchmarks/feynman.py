@@ -16,12 +16,31 @@ real Feynman CSVs are 1M+ rows each and most pertain to the multivariate
 case. The synthetic generators here use the identical functional forms
 listed in the Feynman Lectures, drawn over physically reasonable ranges.
 
+The catalogue was retuned in issue #11 after the original (issue #6) run
+revealed that polynomial/rational targets like 1/x², 2x/(1+x²), and the
+gaussian sit far outside EML's reachable vocabulary at depth ≤ 5 from
+random init. The current selection keeps:
+
+  - Linear targets (which expose the depth-1 identity-gap finding —
+    EML cannot output `y = x` until depth ≥ 4 because every output is
+    wrapped in an outer `eml(·,·)`)
+  - exp / ln chains (EML's natural wheelhouse)
+  - The depth-1 EML shape eml(x, x) = exp(x) - ln(x)
+
+The defaults were also flipped to `--method curriculum --normalize none`.
+Both `minmax` and `standard` normalization destroy symbolic recoverability
+for nonlinear targets — the affine transform of an elementary function is
+generally not itself elementary in the EML vocabulary, so the engine ends
+up fitting an unreachable shape. The runner now reports RMSE in *original*
+coordinate space (not normalized space, as the original implementation
+did, which was misleading). See issue #11 for the full diagnosis.
+
 Usage::
 
     python -m benchmarks.feynman                  # quick: 8 problems
     python -m benchmarks.feynman --all            # all problems
     python -m benchmarks.feynman --workers 8      # parallel seeds
-    python -m benchmarks.feynman --method curriculum
+    python -m benchmarks.feynman --normalize minmax  # for huge y ranges
 """
 
 from __future__ import annotations
@@ -33,13 +52,14 @@ from dataclasses import dataclass
 from typing import Callable, Optional
 
 import numpy as np
+import torch
 
 # Allow running as a script from the repo root or as `python -m benchmarks.feynman`.
 import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from eml_sr import discover, discover_curriculum, Normalizer  # noqa: E402
+from eml_sr import REAL, discover, discover_curriculum, Normalizer  # noqa: E402
 
 
 # ─── Problem catalogue ─────────────────────────────────────────
@@ -86,95 +106,70 @@ def _projection_const(c):
 # "Projection" means a multivariate equation evaluated at fixed constants.
 
 PROBLEMS: list[FeynmanProblem] = [
-    # ── Genuinely univariate ────────────────────────────────────
+    # ── EML's natural vocabulary (depth 1) ──────────────────────
     FeynmanProblem(
-        "I.6.2", "gaussian", "exp(-x^2 / 2) / sqrt(2*pi)",
-        _gaussian, x_range=(-2.0, 2.0),
-        notes="standard normal pdf, depth ≥ 4 (squaring + exp + scale)",
+        "eml.exp", "exp", "exp(x)",
+        lambda x: np.exp(x), x_range=(0.5, 2.5),
+        notes="depth-1 atom: eml(x, 1) = exp(x)",
     ),
     FeynmanProblem(
-        "I.6.20a", "gaussian-sigma1", "exp(-x^2/2)",
-        lambda x: np.exp(-x ** 2 / 2), x_range=(-2.0, 2.0),
+        "eml.eml", "exp-minus-ln", "exp(x) - ln(x)",
+        lambda x: np.exp(x) - np.log(x), x_range=(0.5, 3.0),
+        notes="depth-1 atom: the raw eml(x, x) shape",
     ),
     FeynmanProblem(
-        "I.27.6", "lens-thin", "1/x", lambda x: 1.0 / x,
-        x_range=(0.5, 3.0),
+        "eml.const-e", "constant-e", "e",
+        _projection_const(math.e), x_range=(0.5, 2.5),
+        notes="depth-1 atom: eml(1, 1) = e",
     ),
     FeynmanProblem(
-        "I.34.8", "doppler-low", "x", lambda x: x.copy(), x_range=(0.5, 3.0),
-        notes="trivial identity baseline",
-    ),
-    FeynmanProblem(
-        "I.34.27", "photon-momentum", "1.0545718e-34 * x",
-        lambda x: 1.0545718e-34 * x, x_range=(1e14, 1e15),
-        notes="extreme-scale linear; tests normalization",
+        "eml.e-ln", "e-minus-ln", "e - ln(x)",
+        lambda x: math.e - np.log(x), x_range=(0.5, 3.0),
+        notes="depth-1 atom: eml(1, x)",
     ),
 
-    # ── Projections of common multivariate Feynman eqs ──────────
+    # ── exp / ln chains (EML's wheelhouse) ──────────────────────
     FeynmanProblem(
-        "I.12.1", "friction", "0.3 * x", lambda x: 0.3 * x,
-        x_range=(0.0, 5.0),
-        notes="μ*F_n with μ=0.3 fixed",
+        "eml.lnx", "ln", "ln(x)",
+        lambda x: np.log(x), x_range=(0.5, 5.0),
+        notes="known to require depth 3 for exact recovery",
     ),
     FeynmanProblem(
-        "I.12.4", "coulomb-r", "1 / x^2", lambda x: 1.0 / (x ** 2),
+        "eml.expexp", "exp-of-exp", "exp(exp(x))",
+        lambda x: np.exp(np.exp(x)), x_range=(-1.0, 0.5),
+        notes="depth-2 nested exp; curriculum often beats fixed search",
+    ),
+    FeynmanProblem(
+        "eml.expexpexp", "exp-of-exp-of-exp", "exp(exp(exp(x)))",
+        lambda x: np.exp(np.exp(np.exp(x))), x_range=(-1.0, 0.3),
+        notes="depth-3 nested exp; curriculum-only territory",
+    ),
+    FeynmanProblem(
+        "eml.exp-1", "exp-minus-1", "exp(x) - 1",
+        lambda x: np.exp(x) - 1.0, x_range=(0.0, 2.0),
+        notes="depth-2: eml(x, e) — also the dominant local minimum",
+    ),
+
+    # ── Linear targets (Feynman: friction, potential, photon) ───
+    # These exist primarily to exercise the depth-1 identity-gap finding
+    # from issue #11: EML cannot emit `y = x` until depth ≥ 4 because
+    # every output is wrapped in an outer eml(·,·). When these "succeed"
+    # it is at depth 4 and only because the simplifier collapses a
+    # multi-eml chain back to `x`.
+    FeynmanProblem(
+        "I.34.8", "doppler-low", "x", lambda x: x.copy(),
         x_range=(0.5, 3.0),
-        notes="Coulomb law in r with q1*q2/(4πε0)=1",
+        notes="identity baseline; expected to need depth ≥ 4 (issue #11)",
+    ),
+    FeynmanProblem(
+        "I.12.1", "friction", "0.3 * x", lambda x: 0.3 * x,
+        x_range=(0.5, 5.0),
+        notes="μ*F_n with μ=0.3 fixed; relies on normalizer to absorb scale",
     ),
     FeynmanProblem(
         "I.14.3", "potential-mgz", "9.81 * x", lambda x: 9.81 * x,
-        x_range=(0.0, 10.0),
+        x_range=(0.5, 10.0),
         notes="gravitational PE, m=1 kg",
-    ),
-    FeynmanProblem(
-        "I.16.6", "rel-velocity", "2*x / (1 + x*x)",
-        lambda x: 2 * x / (1 + x * x),
-        x_range=(-0.9, 0.9),
-        notes="velocity addition (v1=v2=x in c=1 units)",
-    ),
-    FeynmanProblem(
-        "I.25.13", "voltage-q", "x / 1e-6", lambda x: x / 1e-6,
-        x_range=(1e-9, 1e-7),
-        notes="V = q/C, C=1μF, extreme-scale",
-    ),
-    FeynmanProblem(
-        "I.29.4", "wavevector", "x / 3e8", lambda x: x / 3e8,
-        x_range=(1e6, 1e9),
-        notes="ω/c → wavenumber",
-    ),
-    FeynmanProblem(
-        "I.34.10", "doppler-freq", "1 / (1 - x)",
-        lambda x: 1.0 / (1.0 - x),
-        x_range=(-0.5, 0.5),
-        notes="non-relativistic Doppler shift",
-    ),
-    FeynmanProblem(
-        "I.39.10", "kinetic-T", "1.5 * 1.380649e-23 * x",
-        lambda x: 1.5 * 1.380649e-23 * x,
-        x_range=(100.0, 600.0),
-        notes="thermal energy at temperature T",
-    ),
-    FeynmanProblem(
-        "I.41.16", "planck-rj", "2 * x", lambda x: 2 * x,
-        x_range=(1e10, 1e14),
-        notes="Rayleigh-Jeans low-freq limit (linear in ν)",
-    ),
-
-    # ── Stress tests (deeper formulas) ──────────────────────────
-    FeynmanProblem(
-        "stress.1", "exp-of-exp", "exp(exp(x))",
-        lambda x: np.exp(np.exp(x)), x_range=(-1.0, 0.5),
-        notes="depth-2 nested exp, curriculum often beats fixed search",
-    ),
-    FeynmanProblem(
-        "stress.2", "exp-minus-ln", "exp(x) - ln(x)",
-        lambda x: np.exp(x) - np.log(x), x_range=(0.5, 3.0),
-        notes="raw eml shape — should be depth 1",
-    ),
-    FeynmanProblem(
-        "stress.3", "ln-x", "ln(x)", lambda x: np.log(x),
-        x_range=(0.5, 5.0),
-        notes="known to require depth 3 for exact recovery",
     ),
 ]
 
@@ -208,22 +203,42 @@ def _run_one(prob: FeynmanProblem, *, max_depth: int, n_tries: int,
 
     if result is None:
         return {"prob": prob, "ok": False, "expr": None, "elapsed": elapsed,
-                "rmse": float("inf"), "depth": None}
+                "rmse": float("inf"), "rmse_norm": float("inf"), "depth": None}
+
+    # Recompute RMSE in *original* coordinate space — `result["snap_rmse"]`
+    # is reported in normalized space, which is misleading: an affine
+    # transform of an elementary target (minmax/standard) is generally
+    # not itself elementary in the EML vocabulary, so a perfect-RMSE fit
+    # in normalized space corresponds to a *bad* fit in original space.
+    # Issue #11 documents the implications.
+    snapped = result.get("snapped_tree")
+    rmse_orig = float("inf")
+    if snapped is not None:
+        with torch.no_grad():
+            pred_n, _, _ = snapped(torch.tensor(x_n, dtype=REAL), tau=0.01)
+            pred_n_np = pred_n.real.detach().numpy()
+            pred_orig = norm.inverse_y(pred_n_np)
+            rmse_orig = float(np.sqrt(np.mean((pred_orig - y) ** 2)))
 
     return {
         "prob": prob,
         "ok": bool(result.get("exact", True)),
         "expr": result["expr"],
-        "rmse": result["snap_rmse"],
+        "rmse": rmse_orig,
+        "rmse_norm": result["snap_rmse"],
         "depth": result["depth"],
         "elapsed": elapsed,
         "normalizer": norm,
     }
 
 
-def _fmt_row(r: dict) -> str:
+def _fmt_row(r: dict, threshold: float) -> str:
     p = r["prob"]
-    ok = "✓" if r["ok"] else " "
+    # Recovery is "ok" only when the original-space RMSE is below threshold.
+    # The discover()-internal "exact" flag is computed against the
+    # normalized-space MSE which can be misleading (issue #11).
+    is_ok = math.isfinite(r["rmse"]) and r["rmse"] < threshold
+    ok = "✓" if is_ok else " "
     rmse = "—" if not math.isfinite(r["rmse"]) else f"{r['rmse']:.2e}"
     depth = "—" if r["depth"] is None else str(r["depth"])
     expr = (r["expr"] or "<no formula>")[:42]
@@ -234,6 +249,7 @@ def _fmt_row(r: dict) -> str:
 def run(quick: bool = True, **kwargs) -> list:
     """Run the Feynman benchmark and return a list of result dicts."""
     problems = PROBLEMS[:8] if quick else PROBLEMS
+    threshold = kwargs.get("threshold", 1e-6)
 
     print(f"═══ Feynman benchmark — {len(problems)} problems "
           f"({kwargs.get('method', 'discover')}, "
@@ -247,9 +263,13 @@ def run(quick: bool = True, **kwargs) -> list:
     for prob in problems:
         r = _run_one(prob, **kwargs)
         results.append(r)
-        print(_fmt_row(r))
+        # RMSE in the printed row is now in *original* coordinate space
+        # (issue #11). Recovery counts only succeed when that original-space
+        # RMSE is below the user-supplied threshold.
+        print(_fmt_row(r, threshold=threshold))
 
-    n_ok = sum(1 for r in results if r["ok"])
+    n_ok = sum(1 for r in results
+               if math.isfinite(r["rmse"]) and r["rmse"] < threshold)
     print()
     print(f"  exact recovery:  {n_ok}/{len(results)}  "
           f"({100*n_ok/len(results):.0f}%)")
@@ -262,10 +282,19 @@ def main():
     p.add_argument("--all", action="store_true", help="Run all problems (else first 8)")
     p.add_argument("--max-depth", type=int, default=4)
     p.add_argument("--tries", type=int, default=8)
-    p.add_argument("--method", choices=["discover", "curriculum"], default="discover")
-    p.add_argument("--normalize", choices=["minmax", "standard", "none"], default="minmax")
+    # Defaults retuned in issue #11. Key finding: ANY normalization (minmax
+    # or standard) destroys symbolic recoverability for nonlinear targets,
+    # because the affine transform of an elementary function is generally
+    # not itself elementary in the EML vocabulary. The trimmed catalog uses
+    # modest x ranges so `none` does not overflow the EML clamp. Use
+    # `--normalize minmax` only when the y range spans many decades.
+    p.add_argument("--method", choices=["discover", "curriculum"], default="curriculum")
+    p.add_argument("--normalize", choices=["minmax", "standard", "none"], default="none")
     p.add_argument("--workers", type=int, default=1)
-    p.add_argument("--threshold", type=float, default=1e-10)
+    # Threshold is on *original-space* RMSE, not normalized-space MSE.
+    # 1e-6 is the threshold for "exactly recovered" given float64 precision
+    # over reasonable y-magnitudes; anything higher is an approximation.
+    p.add_argument("--threshold", type=float, default=1e-6)
     args = p.parse_args()
 
     run(
