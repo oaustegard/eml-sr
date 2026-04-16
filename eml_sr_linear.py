@@ -213,75 +213,76 @@ class EMLTree1DLinear(nn.Module):
     """Option B EML tree with unconstrained linear gate combinations.
 
     Same shape contract as `EMLTree1D` but with paper-faithful
-    parameterization:
+    parameterization. Supports n_vars input variables (default 1).
 
-      Leaves: input = α + β·x   (2 reals per leaf)
-      Gates:  input = α + β·x + γ·child  (3 reals per side, 2 sides per node)
+      Leaves: input = α + β₁·x₁ + ... + βₙ·xₙ   (n_vars+1 reals per leaf)
+      Gates:  input = α + β₁·x₁ + ... + βₙ·xₙ + γ·child
+              (n_vars+2 reals per side, 2 sides per node)
 
     Identical parameter tensor *shapes* to `EMLTree1D`. They are *not*
     interchangeable — the values are coefficients here, not pre-softmax
     logits.
     """
 
-    def __init__(self, depth: int, init_scale: float = 0.1):
+    def __init__(self, depth: int, n_vars: int = 1, init_scale: float = 0.1):
         super().__init__()
         self.depth = depth
+        self.n_vars = n_vars
         self.n_leaves = 2 ** depth
         self.n_internal = self.n_leaves - 1
 
-        # Leaf coefficients: (n_leaves, 2) — [α (constant), β (x)]
-        # Initialize close to the depth-1 atom `α=1, β=0` (constant 1) so
-        # the tree starts as a stable constant-1 fit and the optimizer
-        # discovers structure from there.
-        leaf_init = torch.randn(self.n_leaves, 2, dtype=REAL) * init_scale
+        # Leaf coefficients: (n_leaves, n_vars+1) — [α (constant), β₁, ..., βₙ]
+        leaf_init = torch.randn(self.n_leaves, n_vars + 1, dtype=REAL) * init_scale
         leaf_init[:, 0] += 1.0  # bias α toward 1
         self.leaf_logits = nn.Parameter(leaf_init)
 
-        # Gate coefficients: (n_internal, 2, 3) — [α (constant), β (x), γ (child)]
-        # Bias γ toward 1.0 so the child contribution flows up by default;
-        # this matches Option A's behavior of "child" being the most
-        # informative source after random init.
-        gate_init = torch.randn(self.n_internal, 2, 3, dtype=REAL) * init_scale
-        gate_init[..., 2] += 1.0  # bias γ toward 1
+        # Gate coefficients: (n_internal, 2, n_vars+2) — [α, β₁, ..., βₙ, γ]
+        # Bias γ (last index) toward 1.0 so child contribution flows up.
+        gate_init = torch.randn(self.n_internal, 2, n_vars + 2, dtype=REAL) * init_scale
+        gate_init[..., -1] += 1.0  # bias γ toward 1
         self.gate_logits = nn.Parameter(gate_init)
 
     def forward(self, x, tau: float = 1.0):  # tau accepted for API parity, unused
+        # Handle both 1D (batch,) and 2D (batch, n_vars) input.
+        if x.dim() == 1:
+            x = x.unsqueeze(1)  # (batch,) → (batch, 1)
         x = x.to(DTYPE)
         batch = x.shape[0]
-        ones = torch.ones(batch, dtype=DTYPE)
 
-        # Leaf values: α + β·x (no softmax, no temperature)
-        a = self.leaf_logits[:, 0].to(DTYPE)  # (n_leaves,)
-        b = self.leaf_logits[:, 1].to(DTYPE)  # (n_leaves,)
-        # broadcast: (batch, n_leaves)
-        level = a.unsqueeze(0) * ones.unsqueeze(1) + b.unsqueeze(0) * x.unsqueeze(1)
+        # Leaf values: α + β₁·x₁ + ... + βₙ·xₙ
+        coeffs = self.leaf_logits.to(DTYPE)  # (n_leaves, n_vars+1)
+        ones = torch.ones(batch, 1, dtype=DTYPE)
+        candidates = torch.cat([ones, x], dim=1)  # (batch, n_vars+1)
+        level = candidates @ coeffs.T  # (batch, n_leaves)
 
         # Bottom-up: pair children, apply gate linear combos, compute eml
         node_idx = 0
-        x_b = x.unsqueeze(1)  # (batch, 1)
         while level.shape[1] > 1:
             n_pairs = level.shape[1] // 2
             left = level[:, 0::2]   # (batch, n_pairs), complex
             right = level[:, 1::2]
 
-            g = self.gate_logits[node_idx:node_idx + n_pairs]  # (n_pairs, 2, 3) real
+            g = self.gate_logits[node_idx:node_idx + n_pairs]  # (n_pairs, 2, n_vars+2)
             g_c = g.to(DTYPE)
-            # α, β, γ for left and right sides
-            a_l = g_c[:, 0, 0].unsqueeze(0)  # (1, n_pairs)
-            b_l = g_c[:, 0, 1].unsqueeze(0)
-            c_l = g_c[:, 0, 2].unsqueeze(0)
-            a_r = g_c[:, 1, 0].unsqueeze(0)
-            b_r = g_c[:, 1, 1].unsqueeze(0)
-            c_r = g_c[:, 1, 2].unsqueeze(0)
+            child_idx = self.n_vars + 1  # last index is γ (child coeff)
 
-            # Free linear combinations — no clamping of coefficients.
-            left_in = a_l + b_l * x_b + c_l * left
-            right_in = a_r + b_r * x_b + c_r * right
+            for side, child in [(0, left), (1, right)]:
+                gs = g_c[:, side, :]  # (n_pairs, n_vars+2)
+                # α + β₁·x₁ + ... + βₙ·xₙ
+                blend = gs[:, 0].unsqueeze(0)  # (1, n_pairs) — constant α
+                for v in range(self.n_vars):
+                    blend = blend + gs[:, v + 1].unsqueeze(0) * x[:, v:v+1]
+                # + γ·child
+                blend = blend + gs[:, child_idx].unsqueeze(0) * child
+
+                if side == 0:
+                    left_in = blend
+                else:
+                    right_in = blend
 
             level = eml_op(left_in, right_in)
 
-            # Same numerical clamp as Option A — exp/ln overflow is
-            # independent of the parameterization.
+            # Same numerical clamp as Option A.
             level = torch.complex(
                 torch.nan_to_num(level.real, nan=0.0,
                                  posinf=_CLAMP, neginf=-_CLAMP).clamp(-_CLAMP, _CLAMP),
@@ -310,6 +311,12 @@ class EMLTree1DLinear(nn.Module):
                         flat[i] = snapped
         return tree
 
+    def _var_names(self) -> list:
+        """Variable names for expression printing."""
+        if self.n_vars == 1:
+            return ["x"]
+        return [f"x{i+1}" for i in range(self.n_vars)]
+
     def to_expr(self) -> str:
         """Pretty-print the tree as a linear-combination eml expression.
 
@@ -318,24 +325,57 @@ class EMLTree1DLinear(nn.Module):
         atomic vocabulary. The printed form is therefore pre-simplification:
         readers can verify structure but the surface syntax is verbose.
         """
-        leaf_a = self.leaf_logits[:, 0].tolist()
-        leaf_b = self.leaf_logits[:, 1].tolist()
+        var_names = self._var_names()
+        leaf_coeffs = self.leaf_logits.tolist()  # (n_leaves, n_vars+1)
         gate = self.gate_logits.tolist()
 
-        # Pretty-print each leaf as α + β·x.
-        exprs = [_lin_expr(a, b, "x") for a, b in zip(leaf_a, leaf_b)]
+        # Pretty-print each leaf as α + β₁·x₁ + ... + βₙ·xₙ.
+        if self.n_vars == 1:
+            exprs = [_lin_expr(lc[0], lc[1], var_names[0])
+                     for lc in leaf_coeffs]
+        else:
+            exprs = []
+            for lc in leaf_coeffs:
+                parts = []
+                a_val = lc[0]
+                if abs(a_val) > 0.01:
+                    parts.append(_fmt_coef(a_val))
+                for v, name in enumerate(var_names):
+                    b_val = lc[v + 1]
+                    if abs(b_val) > 0.01:
+                        parts.append(f"{_fmt_coef(b_val)}*{name}")
+                exprs.append(" + ".join(parts) if parts else "0")
 
         node_idx = 0
         while len(exprs) > 1:
             new_exprs = []
             for i in range(0, len(exprs), 2):
                 left_child, right_child = exprs[i], exprs[i + 1]
-                gl = gate[node_idx]  # [[αl, βl, γl], [αr, βr, γr]]
-                left_in = _lin_expr3(gl[0][0], gl[0][1], gl[0][2],
-                                     "x", left_child)
-                right_in = _lin_expr3(gl[1][0], gl[1][1], gl[1][2],
-                                      "x", right_child)
-                new_exprs.append(f"eml({left_in}, {right_in})")
+                gl = gate[node_idx]  # [[α, β₁, ..., βₙ, γ], [...]]
+                # Build linear combination strings for each side
+                for side_idx, child_expr in [(0, left_child), (1, right_child)]:
+                    gs = gl[side_idx]
+                    if self.n_vars == 1:
+                        # Backward-compatible 3-arg form
+                        side_str = _lin_expr3(
+                            gs[0], gs[1], gs[2], var_names[0], child_expr)
+                    else:
+                        parts = []
+                        if abs(gs[0]) > 0.01:
+                            parts.append(_fmt_coef(gs[0]))
+                        for v, name in enumerate(var_names):
+                            if abs(gs[v + 1]) > 0.01:
+                                parts.append(f"{_fmt_coef(gs[v+1])}*{name}")
+                        gamma = gs[self.n_vars + 1]
+                        if abs(gamma) > 0.01:
+                            parts.append(
+                                f"{_fmt_coef(gamma)}*({child_expr})")
+                        side_str = " + ".join(parts) if parts else "0"
+                    if side_idx == 0:
+                        left_in_str = side_str
+                    else:
+                        right_in_str = side_str
+                new_exprs.append(f"eml({left_in_str}, {right_in_str})")
                 node_idx += 1
             exprs = new_exprs
         return exprs[0]

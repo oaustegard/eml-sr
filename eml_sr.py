@@ -36,45 +36,52 @@ def eml_op(x, y):
 # ─── Tree ──────────────────────────────────────────────────────
 
 class EMLTree1D(nn.Module):
-    """Univariate EML tree of given depth.
+    """EML tree of given depth.
 
-    Leaves: soft choice between 1 and x  (2 logits per leaf)
-    Gates:  each child input soft-routes over {1, x, child}
-            (3 logits per side, 2 sides per node)
+    Supports n_vars input variables (default 1 for backward compat).
+
+    Leaves: soft choice over {1, x₁, ..., xₙ}  (n_vars+1 logits per leaf)
+    Gates:  each child input soft-routes over {1, x₁, ..., xₙ, child}
+            (n_vars+2 logits per side, 2 sides per node)
     """
 
-    def __init__(self, depth: int, init_scale: float = 1.0):
+    def __init__(self, depth: int, n_vars: int = 1, init_scale: float = 1.0):
         super().__init__()
         self.depth = depth
+        self.n_vars = n_vars
         self.n_leaves = 2 ** depth
         self.n_internal = self.n_leaves - 1
 
-        # Leaf logits: (n_leaves, 2) — [weight_for_1, weight_for_x]
-        leaf_init = torch.randn(self.n_leaves, 2, dtype=REAL) * init_scale
+        # Leaf logits: (n_leaves, n_vars+1) — [weight_for_1, weight_for_x1, ...]
+        leaf_init = torch.randn(self.n_leaves, n_vars + 1, dtype=REAL) * init_scale
         leaf_init[:, 0] += 2.0  # bias toward constant 1
         self.leaf_logits = nn.Parameter(leaf_init)
 
-        # Gate logits: (n_internal, 2, 3) — 3-way softmax over [1, x, child]
+        # Gate logits: (n_internal, 2, n_vars+2) — softmax over [1, x1, ..., xn, child]
         # Bias toward constant 1 (safe default that triggers leaf usage below).
-        gate_init = torch.randn(self.n_internal, 2, 3, dtype=REAL) * init_scale
+        gate_init = torch.randn(self.n_internal, 2, n_vars + 2, dtype=REAL) * init_scale
         gate_init[..., 0] += 4.0
         self.gate_logits = nn.Parameter(gate_init)
 
     def forward(self, x, tau: float = 1.0):
+        # Handle both 1D (batch,) and 2D (batch, n_vars) input.
+        if x.dim() == 1:
+            x = x.unsqueeze(1)  # (batch,) → (batch, 1)
         x = x.to(DTYPE)
         batch = x.shape[0]
-        ones = torch.ones(batch, dtype=DTYPE)
+        ones = torch.ones(batch, 1, dtype=DTYPE)
 
-        # Leaf values: soft mixture of 1 and x
-        w = torch.softmax(self.leaf_logits / tau, dim=1).to(DTYPE)  # (n_leaves, 2)
-        candidates = torch.stack([ones, x], dim=1)  # (batch, 2)
+        # Leaf values: soft mixture of {1, x₁, ..., xₙ}
+        w = torch.softmax(self.leaf_logits / tau, dim=1).to(DTYPE)  # (n_leaves, n_vars+1)
+        candidates = torch.cat([ones, x], dim=1)  # (batch, n_vars+1)
         level = candidates @ w.T  # (batch, n_leaves)
 
-        # Gate probabilities: 3-way softmax per side
-        gate_probs = torch.softmax(self.gate_logits / tau, dim=-1)  # (n_internal, 2, 3)
+        # Gate probabilities: (n_vars+2)-way softmax per side
+        gate_probs = torch.softmax(self.gate_logits / tau, dim=-1)  # (n_internal, 2, n_vars+2)
 
-        x_r = x.real.unsqueeze(1)  # (batch, 1)
-        x_i = x.imag.unsqueeze(1)
+        # Precompute x real/imag for gate blending: (batch, n_vars)
+        x_r_all = x.real  # (batch, n_vars)
+        x_i_all = x.imag  # (batch, n_vars)
 
         # Bottom-up: pair children, apply gates, compute eml
         node_idx = 0
@@ -83,55 +90,52 @@ class EMLTree1D(nn.Module):
             left = level[:, 0::2]   # (batch, n_pairs)
             right = level[:, 1::2]
 
-            pg = gate_probs[node_idx:node_idx + n_pairs]  # (n_pairs, 2, 3)
-            # [p_const, p_x, p_child] for each side
-            p0l = pg[:, 0, 0].unsqueeze(0)  # (1, n_pairs)
-            p1l = pg[:, 0, 1].unsqueeze(0)
-            p2l = pg[:, 0, 2].unsqueeze(0)
-            p0r = pg[:, 1, 0].unsqueeze(0)
-            p1r = pg[:, 1, 1].unsqueeze(0)
-            p2r = pg[:, 1, 2].unsqueeze(0)
+            pg = gate_probs[node_idx:node_idx + n_pairs]  # (n_pairs, 2, n_vars+2)
 
-            # When child contribution is negligible, zero it out to avoid
-            # 0*inf = nan (since `left`/`right` may be clamped-inf).
-            mask_l = p2l > _CHILD_EPS
-            mask_r = p2r > _CHILD_EPS
-            safe_left_r = torch.where(mask_l, left.real, torch.zeros_like(left.real))
-            safe_left_i = torch.where(mask_l, left.imag, torch.zeros_like(left.imag))
-            safe_right_r = torch.where(mask_r, right.real, torch.zeros_like(right.real))
-            safe_right_i = torch.where(mask_r, right.imag, torch.zeros_like(right.imag))
-            p2l_safe = torch.where(mask_l, p2l, torch.zeros_like(p2l))
-            p2r_safe = torch.where(mask_r, p2r, torch.zeros_like(p2r))
+            # Build gate inputs for left and right sides.
+            # For each side s ∈ {0=left, 1=right}:
+            #   input = p[0]*1 + p[1]*x₁ + ... + p[n_vars]*xₙ + p[n_vars+1]*child
+            child_idx = self.n_vars + 1  # last index is child
 
-            # Soft blend over [1, x, child]
-            lr = p0l + p1l * x_r + p2l_safe * safe_left_r
-            li = p1l * x_i + p2l_safe * safe_left_i
-            rr = p0r + p1r * x_r + p2r_safe * safe_right_r
-            ri = p1r * x_i + p2r_safe * safe_right_i
+            for side, child in [(0, left), (1, right)]:
+                ps = pg[:, side, :]  # (n_pairs, n_vars+2)
 
-            # Clean bypass when a single choice has essentially all the mass.
-            # This matters at low tau for exact snapping.
-            bl_to_1 = p0l > _BYPASS
-            bl_to_x = p1l > _BYPASS
-            br_to_1 = p0r > _BYPASS
-            br_to_x = p1r > _BYPASS
+                # Child contribution with safe zeroing
+                p_child = ps[:, child_idx].unsqueeze(0)  # (1, n_pairs)
+                mask_c = p_child > _CHILD_EPS
+                safe_child_r = torch.where(mask_c, child.real,
+                                           torch.zeros_like(child.real))
+                safe_child_i = torch.where(mask_c, child.imag,
+                                           torch.zeros_like(child.imag))
+                p_child_safe = torch.where(mask_c, p_child,
+                                           torch.zeros_like(p_child))
 
-            ones_lr = torch.ones_like(lr)
-            zeros_li = torch.zeros_like(li)
-            x_r_b = x_r.expand_as(lr)
-            x_i_b = x_i.expand_as(li)
+                # Start with constant term
+                p_const = ps[:, 0].unsqueeze(0)  # (1, n_pairs)
+                blend_r = p_const + p_child_safe * safe_child_r
+                blend_i = p_child_safe * safe_child_i
 
-            lr = torch.where(bl_to_1, ones_lr, lr)
-            li = torch.where(bl_to_1, zeros_li, li)
-            lr = torch.where(bl_to_x, x_r_b, lr)
-            li = torch.where(bl_to_x, x_i_b, li)
-            rr = torch.where(br_to_1, ones_lr, rr)
-            ri = torch.where(br_to_1, zeros_li, ri)
-            rr = torch.where(br_to_x, x_r_b, rr)
-            ri = torch.where(br_to_x, x_i_b, ri)
+                # Add variable contributions
+                for v in range(self.n_vars):
+                    p_v = ps[:, v + 1].unsqueeze(0)  # (1, n_pairs)
+                    blend_r = blend_r + p_v * x_r_all[:, v:v+1]  # (batch, n_pairs)
+                    blend_i = blend_i + p_v * x_i_all[:, v:v+1]
 
-            left_in = torch.complex(lr, li)
-            right_in = torch.complex(rr, ri)
+                # Clean bypass when a single choice has all the mass.
+                b_to_1 = p_const > _BYPASS
+                blend_r = torch.where(b_to_1, torch.ones_like(blend_r), blend_r)
+                blend_i = torch.where(b_to_1, torch.zeros_like(blend_i), blend_i)
+                for v in range(self.n_vars):
+                    b_to_xv = ps[:, v + 1].unsqueeze(0) > _BYPASS
+                    xv_r = x_r_all[:, v:v+1].expand_as(blend_r)
+                    xv_i = x_i_all[:, v:v+1].expand_as(blend_i)
+                    blend_r = torch.where(b_to_xv, xv_r, blend_r)
+                    blend_i = torch.where(b_to_xv, xv_i, blend_i)
+
+                if side == 0:
+                    left_in = torch.complex(blend_r, blend_i)
+                else:
+                    right_in = torch.complex(blend_r, blend_i)
 
             level = eml_op(left_in, right_in)
 
@@ -154,13 +158,13 @@ class EMLTree1D(nn.Module):
         with torch.no_grad():
             k = 50.0
 
-            # Leaves: argmax over 2 options
+            # Leaves: argmax over n_vars+1 options
             lc = torch.argmax(tree.leaf_logits, dim=1)
             new_leaf = torch.full_like(tree.leaf_logits, -k)
             new_leaf[torch.arange(tree.n_leaves), lc] = k
             tree.leaf_logits.copy_(new_leaf)
 
-            # Gates: argmax over 3 options, per side
+            # Gates: argmax over n_vars+2 options, per side
             gc = torch.argmax(tree.gate_logits, dim=-1)  # (n_internal, 2)
             new_gate = torch.full_like(tree.gate_logits, -k)
             idx = torch.arange(tree.n_internal)
@@ -169,21 +173,27 @@ class EMLTree1D(nn.Module):
             tree.gate_logits.copy_(new_gate)
         return tree
 
+    def _var_labels(self) -> list:
+        """Variable names for expression printing."""
+        if self.n_vars == 1:
+            return ["1", "x"]
+        return ["1"] + [f"x{i+1}" for i in range(self.n_vars)]
+
     def to_expr(self) -> str:
         """Extract symbolic expression from snapped tree."""
         leaf_choices = torch.argmax(self.leaf_logits, dim=1).tolist()
         gate_choices = torch.argmax(self.gate_logits, dim=-1).tolist()  # (n_internal, 2)
 
-        leaf_labels = {0: "1", 1: "x"}
-        exprs = [leaf_labels[c] for c in leaf_choices]
+        labels = self._var_labels()
+        exprs = [labels[c] for c in leaf_choices]
 
         node_idx = 0
         while len(exprs) > 1:
             new_exprs = []
             for i in range(0, len(exprs), 2):
                 lc, rc = gate_choices[node_idx]
-                left = _resolve_gate(lc, exprs[i])
-                right = _resolve_gate(rc, exprs[i + 1])
+                left = _resolve_gate(lc, exprs[i], self.n_vars)
+                right = _resolve_gate(rc, exprs[i + 1], self.n_vars)
                 new_exprs.append(f"eml({left}, {right})")
                 node_idx += 1
             exprs = new_exprs
@@ -202,12 +212,15 @@ class EMLTree1D(nn.Module):
         return n
 
 
-def _resolve_gate(choice: int, child_expr: str) -> str:
-    """Map a 3-way gate choice to the input expression."""
+def _resolve_gate(choice: int, child_expr: str, n_vars: int = 1) -> str:
+    """Map a gate choice index to the input expression.
+
+    Indices: 0 → "1", 1..n_vars → variable names, n_vars+1 → child.
+    """
     if choice == 0:
         return "1"
-    if choice == 1:
-        return "x"
+    if choice <= n_vars:
+        return "x" if n_vars == 1 else f"x{choice}"
     return child_expr
 
 
