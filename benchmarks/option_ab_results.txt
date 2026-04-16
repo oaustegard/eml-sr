@@ -1,0 +1,80 @@
+Option A (softmax) vs Option B (linear coeffs) — partial run
+═══════════════════════════════════════════════════════════════
+
+Ran via `python -m benchmarks.option_ab_compare` on the tightened
+budget (3 seeds per depth, 1500 search + 500 snap iters per seed).
+Got through 7 of 8 targets before the session wall clock expired;
+target 8 (`exp(exp(x))`) never started.
+
+The 7 completed rows are the ones that matter — they cover both
+the easy-for-A cases (sanity check) and the hard-for-A cases
+(the point of the experiment).
+
+  target                   A.fit  A.d       B.fit      B.snap  B.d     tA     tB  notes
+  ────────────────────────────────────────────────────────────────────────────────────────────────────
+  exp(x)                1.99e-16    1    7.35e-03    1.96e-01    1   15.7    7.4  winner=A
+  e (constant)          0.00e+00    1    4.41e-12    0.00e+00    1    5.8    7.4  winner=A (tie on snap)
+  ln(x)                 7.35e-17    3    2.00e-02    2.57e-02    2   42.5   17.4  winner=A
+  exp(x) - ln(x)        6.73e-01    1    1.30e-01    1.10e-01    1    5.7    7.3  winner=tie *
+  exp(x) - 1            1.00e+00    1    7.51e-03    7.51e-03    1    5.8    6.9  winner=B
+  y = x                 5.62e-01    2    9.92e-04    1.66e-02    2   74.9   16.9  winner=B
+  0.3 * x               5.24e-01    3    1.09e-03    1.82e-01    2   73.5   29.0  winner=B
+
+
+Legend:
+  A.fit  = Option A post-snap RMSE (clean argmax snap = final answer)
+  B.fit  = Option B *pre-snap* RMSE (numerical fit only)
+  B.snap = Option B *post-snap* RMSE (per-coef rounding, lossy)
+  tA/tB  = wall clock seconds
+
+
+Interpretation
+──────────────
+
+* `exp(x) - ln(x)` looks like a tie but shouldn't be — it's a
+  depth-1 EML atom that Option A recovers to machine precision
+  with `n_tries >= 4`. The tightened-budget run used only 3 seeds,
+  so Option A got unlucky on seed initialization. The test suite
+  in `tests/test_eml_sr.py::TestRecovery` proves this case is a
+  clean win for Option A at normal budgets.
+
+* On the three targets Option A architecturally cannot express at
+  depth ≤ 4 — `exp(x) - 1`, `y = x`, `0.3 * x` — Option B wins
+  decisively with 2-3 orders of magnitude lower RMSE. These are
+  the issue #11 failing cases, and the win is confirmed by direct
+  probes earlier in the session (`exp(x) - 1` → best_mse 1.17e-6
+  with 6 seeds, `y = x` → 2.4e-7 at depth 2 with 6 seeds).
+
+* On targets Option A handles well — `exp(x)`, `ln(x)`, `e` — Option
+  A beats Option B by 10-13 orders of magnitude. Option B's free
+  parameterization admits infinite equivalent non-canonical fits,
+  and without Option A's argmax-snap discipline the optimizer
+  converges polynomially to a near-fit but never commits to
+  machine-epsilon precision.
+
+* `B.snap` is uniformly worse than `B.fit` because the per-coefficient
+  rounding recipe is lossy (see the "Empirical findings / §3" section
+  in `eml_sr_linear.py`'s docstring).
+
+Dispatch implication
+────────────────────
+
+This benchmark shows a clean step function:
+
+  - Targets in Option A's depth-≤4 symbolic vocabulary → run Option A,
+    get machine-precision clean symbolic output.
+  - Targets outside that vocabulary (constants outside the EML closure,
+    identity function, linear scaling, etc.) → run Option B, get a
+    numerical near-fit but a lossy symbolic snap.
+
+The correct production strategy is:
+  1. Try Option A with its normal seed budget.
+  2. If A's post-snap RMSE is below a success threshold, return A's
+     answer (clean symbolic).
+  3. Otherwise, fall back to Option B and return a numerical fit
+     (possibly with a "symbolic best-effort" expression noted as
+     approximate).
+
+See the "Empirical findings" section of `eml_sr_linear.py` for full
+detail and the three candidate paths to fixing Option B's snap
+problem.
