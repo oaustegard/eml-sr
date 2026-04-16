@@ -528,6 +528,200 @@ def _train_one_linear(
     }
 
 
+# ─── Iterative snap (pruning) ────────────────────────────────
+#
+# The naive all-at-once snap destroys the fit because individual
+# coefficients are not independent carriers of meaning. Iterative
+# pruning snaps one coefficient at a time — smallest distance to
+# nearest named constant first — and retrains the remaining free
+# coefficients after each snap to absorb the discontinuity.
+#
+# This is the standard neural-network magnitude-pruning algorithm
+# applied to the coefficient lattice {0, ±1, ±2, ±e}.
+
+def _nearest_snap(v: float) -> tuple[float, float]:
+    """Return (snap_target, distance) for the nearest named constant."""
+    best_c, best_d = 0.0, abs(v)
+    for c, _ in _NAMED_CONSTANTS:
+        d = abs(v - c)
+        if d < best_d:
+            best_c, best_d = c, d
+    # Also check nearest integer for larger values.
+    ri = float(round(v))
+    d = abs(v - ri)
+    if d < best_d:
+        best_c, best_d = ri, d
+    return best_c, best_d
+
+
+def iterative_snap(
+    tree: EMLTree1DLinear,
+    x_data: torch.Tensor,
+    targets: torch.Tensor,
+    retrain_iters: int = 300,
+    lr: float = 0.005,
+    max_mse_ratio: float = 100.0,
+    verbose: bool = False,
+) -> EMLTree1DLinear:
+    """Iteratively snap a trained Option-B tree's coefficients.
+
+    Algorithm:
+      1. Collect all un-snapped coefficients
+      2. Find the one closest to a named constant
+      3. Snap it (set value, freeze via requires_grad mask)
+      4. Retrain remaining free coefficients for `retrain_iters` steps
+      5. If MSE blew up beyond `max_mse_ratio × initial_mse`, undo and
+         try the next-closest coefficient
+      6. Repeat until all coefficients are snapped or no more can be
+         snapped without blowing up MSE
+
+    Args:
+        tree: a trained EMLTree1DLinear (will be deep-copied)
+        x_data: training inputs (float64 tensor)
+        targets: training targets (complex128 tensor)
+        retrain_iters: gradient steps after each snap
+        lr: learning rate for retraining
+        max_mse_ratio: if MSE after retrain exceeds this × baseline,
+            reject the snap and try the next candidate
+        verbose: print each snap step
+
+    Returns:
+        A new EMLTree1DLinear with as many coefficients snapped as
+        possible without destroying the fit.
+    """
+    tree = copy.deepcopy(tree)
+
+    # Baseline MSE before any snapping.
+    with torch.no_grad():
+        pred, _, _ = tree(x_data)
+        baseline_mse = float(torch.mean((pred - targets).abs() ** 2).real.item())
+
+    if not math.isfinite(baseline_mse):
+        return tree  # nothing we can do
+
+    mse_ceiling = baseline_mse * max_mse_ratio
+
+    # Build a flat index of all coefficients: (param_name, flat_idx).
+    def _all_indices():
+        indices = []
+        for name, param in [("leaf", tree.leaf_logits),
+                            ("gate", tree.gate_logits)]:
+            flat = param.view(-1)
+            for i in range(flat.numel()):
+                indices.append((name, i))
+        return indices
+
+    frozen = set()  # (name, idx) pairs that are snapped and frozen
+    n_total = tree.leaf_logits.numel() + tree.gate_logits.numel()
+
+    for round_num in range(n_total):
+        # Collect candidates: un-frozen coefficients with their snap distance.
+        candidates = []
+        for name, idx in _all_indices():
+            if (name, idx) in frozen:
+                continue
+            param = tree.leaf_logits if name == "leaf" else tree.gate_logits
+            v = float(param.view(-1)[idx].item())
+            snap_target, dist = _nearest_snap(v)
+            candidates.append((dist, name, idx, snap_target))
+
+        if not candidates:
+            break  # all snapped
+
+        # Sort by distance — snap the "easiest" one first.
+        candidates.sort()
+
+        snapped_one = False
+        for dist, name, idx, snap_target in candidates:
+            # Save state in case we need to undo.
+            saved_state = {k: v.clone() for k, v in tree.state_dict().items()}
+
+            # Snap this coefficient.
+            param = tree.leaf_logits if name == "leaf" else tree.gate_logits
+            with torch.no_grad():
+                param.view(-1)[idx] = snap_target
+
+            frozen.add((name, idx))
+
+            # Retrain remaining free coefficients.
+            _retrain_free(tree, x_data, targets, frozen, retrain_iters, lr)
+
+            # Check MSE.
+            with torch.no_grad():
+                pred, _, _ = tree(x_data)
+                new_mse = float(torch.mean(
+                    (pred - targets).abs() ** 2).real.item())
+
+            if not math.isfinite(new_mse) or new_mse > mse_ceiling:
+                # Reject — undo and try next candidate.
+                tree.load_state_dict(saved_state)
+                frozen.discard((name, idx))
+                if verbose:
+                    print(f"  reject: {name}[{idx}]→{snap_target:.3g} "
+                          f"(mse {new_mse:.2e} > ceiling {mse_ceiling:.2e})")
+                continue
+
+            # Accept.
+            if verbose:
+                print(f"  snap: {name}[{idx}] {dist:.3g}→{snap_target:.3g} "
+                      f"mse={new_mse:.2e}")
+            # Update ceiling: allow gradual degradation but not catastrophic.
+            mse_ceiling = max(mse_ceiling, new_mse * max_mse_ratio)
+            snapped_one = True
+            break  # restart scan with updated tree
+
+        if not snapped_one:
+            if verbose:
+                print(f"  no more coefficients can be snapped "
+                      f"(round {round_num})")
+            break
+
+    if verbose:
+        n_snapped = len(frozen)
+        print(f"  iterative snap: {n_snapped}/{n_total} coefficients "
+              f"snapped")
+
+    return tree
+
+
+def _retrain_free(
+    tree: EMLTree1DLinear,
+    x_data: torch.Tensor,
+    targets: torch.Tensor,
+    frozen: set,
+    iters: int,
+    lr: float,
+):
+    """Retrain only the un-frozen coefficients for `iters` steps."""
+    opt = torch.optim.Adam(tree.parameters(), lr=lr)
+
+    for it in range(iters):
+        opt.zero_grad()
+        pred, _, _ = tree(x_data)
+        mse = torch.mean((pred - targets).abs() ** 2).real
+        if not torch.isfinite(mse):
+            break
+        mse.backward()
+        torch.nn.utils.clip_grad_norm_(tree.parameters(), 1.0)
+
+        # Zero out gradients on frozen coefficients so they don't move.
+        with torch.no_grad():
+            for name, idx in frozen:
+                param = tree.leaf_logits if name == "leaf" else tree.gate_logits
+                if param.grad is not None:
+                    param.grad.view(-1)[idx] = 0.0
+
+        opt.step()
+
+        # Re-enforce exact frozen values (Adam momentum can drift them).
+        with torch.no_grad():
+            for name, idx in frozen:
+                param = tree.leaf_logits if name == "leaf" else tree.gate_logits
+                v = float(param.view(-1)[idx].item())
+                snap_target, _ = _nearest_snap(v)
+                param.view(-1)[idx] = snap_target
+
+
 def discover_linear(
     x: np.ndarray,
     y: np.ndarray,

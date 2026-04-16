@@ -34,7 +34,7 @@ import numpy as np
 import torch
 
 from eml_sr import DTYPE, REAL, discover
-from eml_sr_linear import discover_linear
+from eml_sr_linear import discover_linear, iterative_snap, _train_one_linear
 
 
 def discover_hybrid(
@@ -97,39 +97,56 @@ def discover_hybrid(
         print(f"  Above threshold {fallback_threshold:.0e}, "
               f"falling back to Option B.")
 
-    # ── Stage 2: Option B ──────────────────────────────────────
+    # ── Stage 2: Option B (train + iterative snap) ─────────────
     if verbose:
-        print("\n═══ Stage 2: Option B (linear coefficients) ═══")
+        print("\n═══ Stage 2: Option B (linear coefficients "
+              "+ iterative snap) ═══")
 
-    result_b = discover_linear(
-        x, y,
-        max_depth=max_depth_b,
-        n_tries=n_tries_b,
-        verbose=verbose,
-    )
+    x_t = torch.tensor(x, dtype=REAL)
+    y_t = torch.tensor(y, dtype=DTYPE)
 
-    if result_b is None:
-        # Both failed; return Option A's best attempt.
+    best_b = None
+    for depth in range(1, max_depth_b + 1):
+        for seed in range(n_tries_b):
+            r = _train_one_linear(x_t, y_t, depth=depth, seed=seed,
+                                  search_iters=3000, snap_iters=10,
+                                  lam_disc_max=0.0)
+            r["depth"] = depth
+            if best_b is None or r["best_mse"] < best_b["best_mse"]:
+                best_b = r
+        if best_b and best_b["best_mse"] < 1e-5:
+            break
+
+    if best_b is None:
         if result_a is not None:
             result_a["method"] = "option_a"
             return result_a
         return None
 
-    # Compute the *pre-snap* RMSE on the original data to show the
-    # architecture's true fitting power (separate from snap quality).
-    x_t = torch.tensor(x, dtype=REAL)
+    # Iterative snap: prune one coefficient at a time, retrain.
+    if verbose:
+        print(f"\n  B free fit: mse={best_b['best_mse']:.2e} "
+              f"(depth {best_b['depth']})")
+        print("  Running iterative snap...")
+
+    snapped_tree = iterative_snap(
+        best_b["tree"], x_t, y_t,
+        retrain_iters=300, lr=0.005,
+        verbose=verbose,
+    )
+
     with torch.no_grad():
-        tree = result_b.get("snapped_tree")
-        if tree is not None:
-            # Use the un-snapped tree for fit_rmse if available.
-            pred, _, _ = tree(x_t)
-            fit_rmse = float(np.sqrt(np.mean(
-                (pred.real.detach().numpy() - y) ** 2)))
-        else:
-            fit_rmse = result_b["snap_rmse"]
+        pred, _, _ = snapped_tree(x_t)
+        b_rmse = float(np.sqrt(np.mean(
+            (pred.real.detach().numpy() - y) ** 2)))
+
+    b_expr = snapped_tree.to_expr()
+
+    if verbose:
+        print(f"\n  B iterative snap: rmse={b_rmse:.2e}")
+        print(f"  expr: {b_expr[:80]}")
 
     # Pick the better result between A and B.
-    b_rmse = result_b["snap_rmse"]
     if a_rmse < b_rmse and result_a is not None:
         if verbose:
             print(f"\n  Option A still wins on snap RMSE "
@@ -138,11 +155,13 @@ def discover_hybrid(
         return result_a
 
     if verbose:
-        print(f"\n  ✓ Option B wins: snap_rmse={b_rmse:.2e} "
-              f"fit_rmse={fit_rmse:.2e}")
-        print(f"    depth={result_b['depth']} "
-              f"expr={result_b['expr'][:80]}")
+        print(f"\n  ✓ Option B wins: rmse={b_rmse:.2e}")
 
-    result_b["method"] = "option_b"
-    result_b["fit_rmse"] = fit_rmse
-    return result_b
+    return {
+        "expr": b_expr,
+        "depth": best_b["depth"],
+        "snap_rmse": b_rmse,
+        "snapped_tree": snapped_tree,
+        "method": "option_b",
+        "fit_rmse": best_b["best_mse"] ** 0.5,
+    }
