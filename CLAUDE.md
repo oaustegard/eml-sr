@@ -28,6 +28,13 @@ changes.** In particular, before changing:
 - any of the identity rewrites in the simplifier
 - training dynamics (leaf gating, logit-softmax parameterization, hardening)
 
+**`docs/odrzywolek-2026-eml_MAP.md`** — machine-generated semantic map of the
+paper. Start here instead of the raw PDF: it has a TOC with per-section
+summaries, typed claims (result/definition/method/caveat) with page anchors,
+and a symbol definition index. For programmatic lookup, use
+`docs/odrzywolek-2026-eml.symbols.json` ("where is `edl` defined?") and
+`docs/odrzywolek-2026-eml.anchors.json` (all 103 claims with page numbers).
+
 The paper's Figure 1 ("phylogenetic tree") and Table 4 (EML complexity of each
 standard function) are the canonical reference for which identities should hold.
 
@@ -77,6 +84,9 @@ These are fixed by the paper and must not drift during refactoring:
 | `benchmarks/feynman.py` | Curated univariate slices of AI-Feynman. |
 | `legacy/*.mojo` | Archived parabolic-attention stack-machine prototype. Historical; do not modify in place. |
 | `docs/odrzywolek-2026-eml.pdf` | The paper. |
+| `docs/odrzywolek-2026-eml_MAP.md` | Navigable semantic map of the paper (TOC, claims, symbols). |
+| `docs/odrzywolek-2026-eml.symbols.json` | Symbol index: where each is defined and used. |
+| `docs/odrzywolek-2026-eml.anchors.json` | All 103 extracted claims with page references. |
 
 ## How to stay faithful to the paper
 
