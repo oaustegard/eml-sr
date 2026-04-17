@@ -1,0 +1,481 @@
+[
+  {
+    "symbol": "1",
+    "meaning": "The sole constant used alongside eml to generate all elementary functions",
+    "defined_in": "title",
+    "defined_at_page": 1,
+    "used_in": [
+      "title",
+      "summary-paragraph"
+    ]
+  },
+  {
+    "symbol": "11xE1EE",
+    "meaning": "RPN string encoding of the natural logarithm ln x in pure EML form",
+    "defined_in": "4.1",
+    "defined_at_page": 10,
+    "used_in": [
+      "4.1"
+    ]
+  },
+  {
+    "symbol": "5 * 2^n - 6",
+    "meaning": "Number of parameters in the level-n master formula",
+    "defined_in": "4.3",
+    "defined_at_page": 14,
+    "used_in": [
+      "4.3"
+    ]
+  },
+  {
+    "symbol": "A",
+    "meaning": "Glaisher-Kinkelin constant (~1.28243), used as a transcendental test value for y",
+    "defined_in": null,
+    "defined_at_page": null,
+    "used_in": [
+      "2"
+    ]
+  },
+  {
+    "symbol": "B(x,y)",
+    "meaning": "Example binary function B(x,y) = x - y/2 used to illustrate traps in Sheffer operator analysis",
+    "defined_in": "5",
+    "defined_at_page": 15,
+    "used_in": [
+      "5"
+    ]
+  },
+  {
+    "symbol": "C_0",
+    "meaning": "Initial set of constants, functions, and operators to be reconstructed (defines 'computing all elementary functions')",
+    "defined_in": "2",
+    "defined_at_page": 7,
+    "used_in": [
+      "2"
+    ]
+  },
+  {
+    "symbol": "C_i",
+    "meaning": "Remaining target operator set at iteration i of the bootstrapping procedure",
+    "defined_in": "2",
+    "defined_at_page": 7,
+    "used_in": [
+      "2"
+    ]
+  },
+  {
+    "symbol": "Calc 0",
+    "meaning": "3-primitive calculator configuration using exp and binary logarithm with e absorbed into exp",
+    "defined_in": "3",
+    "defined_at_page": 8,
+    "used_in": [
+      "3"
+    ]
+  },
+  {
+    "symbol": "Calc 1",
+    "meaning": "4-primitive calculator configuration using binary exponentiation and binary logarithm with terminal constant e or \u03c0",
+    "defined_in": "3",
+    "defined_at_page": 8,
+    "used_in": [
+      "3"
+    ]
+  },
+  {
+    "symbol": "Calc 2",
+    "meaning": "4-primitive calculator configuration using exp, ln, and subtraction",
+    "defined_in": "3",
+    "defined_at_page": 8,
+    "used_in": [
+      "3"
+    ]
+  },
+  {
+    "symbol": "Calc 3",
+    "meaning": "6-primitive calculator configuration using exp, ln, negation, reciprocal, and addition, accepting any real constant as input",
+    "defined_in": "3",
+    "defined_at_page": 8,
+    "used_in": [
+      "3"
+    ]
+  },
+  {
+    "symbol": "Complex.log 0 = 0",
+    "meaning": "Lean 4 proof assistant's default junk value for the complex logarithm at zero",
+    "defined_in": null,
+    "defined_at_page": null,
+    "used_in": [
+      "4.1"
+    ]
+  },
+  {
+    "symbol": "E",
+    "meaning": "Shorthand notation for the eml operation in RPN strings",
+    "defined_in": "4.1",
+    "defined_at_page": 10,
+    "used_in": [
+      "4.1"
+    ]
+  },
+  {
+    "symbol": "EDL",
+    "meaning": "A close variant of EML defined by equation (4b)",
+    "defined_in": null,
+    "defined_at_page": null,
+    "used_in": [
+      "5"
+    ]
+  },
+  {
+    "symbol": "EML",
+    "meaning": "The calculator button corresponding to the eml operation",
+    "defined_in": "significance",
+    "defined_at_page": 3,
+    "used_in": [
+      "significance",
+      "1",
+      "4",
+      "5"
+    ]
+  },
+  {
+    "symbol": "EML Sheffer operator",
+    "meaning": "A Sheffer operator discovered by the author, central to the paper's contributions",
+    "defined_in": null,
+    "defined_at_page": null,
+    "used_in": [
+      "ai-use"
+    ]
+  },
+  {
+    "symbol": "F(x)",
+    "meaning": "The level-2 master formula as a function of input x parameterized by alpha_i, beta_i, gamma_i",
+    "defined_in": "4.3",
+    "defined_at_page": 13,
+    "used_in": [
+      "4.3"
+    ]
+  },
+  {
+    "symbol": "K",
+    "meaning": "Kolmogorov-style complexity, measured as the length of a Reverse Polish Notation (RPN) calculator program",
+    "defined_in": "2",
+    "defined_at_page": 7,
+    "used_in": [
+      "2",
+      "4.1",
+      "4.3"
+    ]
+  },
+  {
+    "symbol": "S",
+    "meaning": "Non-terminal symbol in the EML context-free grammar representing any elementary function expression",
+    "defined_in": "4.2",
+    "defined_at_page": 11,
+    "used_in": [
+      "4.2"
+    ]
+  },
+  {
+    "symbol": "S \u2192 1 | eml(S,S)",
+    "meaning": "The grammar rule generating all EML expression trees using only the constant 1 and the eml operator",
+    "defined_in": "title",
+    "defined_at_page": 1,
+    "used_in": [
+      "title",
+      "summary-paragraph"
+    ]
+  },
+  {
+    "symbol": "S_0",
+    "meaning": "Initial set of constants, functions, and operators verified as known/available",
+    "defined_in": "2",
+    "defined_at_page": 7,
+    "used_in": [
+      "2"
+    ]
+  },
+  {
+    "symbol": "S_i",
+    "meaning": "Known operator set at iteration i of the bootstrapping procedure",
+    "defined_in": "2",
+    "defined_at_page": 7,
+    "used_in": [
+      "2"
+    ]
+  },
+  {
+    "symbol": "T(x,y,z)",
+    "meaning": "Ternary operator candidate defined as e^(x/ln x) times ln z / e^y, satisfying T(x,x,x)=1",
+    "defined_in": "5",
+    "defined_at_page": 16,
+    "used_in": [
+      "5"
+    ]
+  },
+  {
+    "symbol": "VerifyBaseSet",
+    "meaning": "Procedure that verifies whether a given operator set can reconstruct all target primitives",
+    "defined_in": "2",
+    "defined_at_page": 7,
+    "used_in": [
+      "2",
+      "3"
+    ]
+  },
+  {
+    "symbol": "alpha_i",
+    "meaning": "Constant coefficient in the linear combination input representation",
+    "defined_in": "4.3",
+    "defined_at_page": 13,
+    "used_in": [
+      "4.3"
+    ]
+  },
+  {
+    "symbol": "alpha_i + beta_i * x + gamma_i * f",
+    "meaning": "General linear combination representing each input to eml in the master formula, unifying constant 1, variable x, and previous eml output f",
+    "defined_in": "4.3",
+    "defined_at_page": 13,
+    "used_in": [
+      "4.3"
+    ]
+  },
+  {
+    "symbol": "avg(x,y)",
+    "meaning": "Arithmetic mean (x+y)/2",
+    "defined_in": null,
+    "defined_at_page": null,
+    "used_in": [
+      "1"
+    ]
+  },
+  {
+    "symbol": "beta_i",
+    "meaning": "Coefficient of input variable x in the linear combination input representation",
+    "defined_in": "4.3",
+    "defined_at_page": 13,
+    "used_in": [
+      "4.3"
+    ]
+  },
+  {
+    "symbol": "edl(x,y)",
+    "meaning": "The EDL cousin operator defined as exp(x) / ln(y), with constant e",
+    "defined_in": "3",
+    "defined_at_page": 9,
+    "used_in": [
+      "3"
+    ]
+  },
+  {
+    "symbol": "ei\u03c6",
+    "meaning": "Euler's formula: exp(i\u03c6) = cos(\u03c6) + i\u00b7sin(\u03c6)",
+    "defined_in": null,
+    "defined_at_page": null,
+    "used_in": [
+      "1"
+    ]
+  },
+  {
+    "symbol": "eml(S,S)",
+    "meaning": "Context-free grammar production rule representing the binary EML Sheffer operation applied to two sub-expressions",
+    "defined_in": "4.2",
+    "defined_at_page": 11,
+    "used_in": [
+      "4.2"
+    ]
+  },
+  {
+    "symbol": "eml(x,y)",
+    "meaning": "The binary operator defined as exp(x) - ln(y), called the Exp-Minus-Log operator",
+    "defined_in": "title",
+    "defined_at_page": 1,
+    "used_in": [
+      "title",
+      "significance",
+      "summary-paragraph",
+      "1",
+      "2",
+      "3",
+      "4.1",
+      "4.3"
+    ]
+  },
+  {
+    "symbol": "eml(y,x)",
+    "meaning": "The -EML cousin operator defined as ln(x) - exp(y), with constant negative infinity",
+    "defined_in": "3",
+    "defined_at_page": 9,
+    "used_in": [
+      "3",
+      "5"
+    ]
+  },
+  {
+    "symbol": "exp(x)",
+    "meaning": "Exponential function e^x",
+    "defined_in": null,
+    "defined_at_page": null,
+    "used_in": [
+      "1"
+    ]
+  },
+  {
+    "symbol": "expx",
+    "meaning": "First (counterclockwise) input to the EML Sheffer operator, representing the argument of the exponential component",
+    "defined_in": "4.2",
+    "defined_at_page": 12,
+    "used_in": [
+      "4.2"
+    ]
+  },
+  {
+    "symbol": "f",
+    "meaning": "Result from a previous eml computation used as input to higher-level eml nodes",
+    "defined_in": "4.3",
+    "defined_at_page": 13,
+    "used_in": [
+      "4.3"
+    ]
+  },
+  {
+    "symbol": "gamma_i",
+    "meaning": "Coefficient of previous eml result f in the linear combination input representation",
+    "defined_in": "4.3",
+    "defined_at_page": 13,
+    "used_in": [
+      "4.3"
+    ]
+  },
+  {
+    "symbol": "hypot(x,y)",
+    "meaning": "Hypotenuse function sqrt(x^2+y^2)",
+    "defined_in": null,
+    "defined_at_page": null,
+    "used_in": [
+      "1"
+    ]
+  },
+  {
+    "symbol": "i",
+    "meaning": "Imaginary unit, square root of -1",
+    "defined_in": null,
+    "defined_at_page": null,
+    "used_in": [
+      "1"
+    ]
+  },
+  {
+    "symbol": "inv(x)",
+    "meaning": "Reciprocal function 1/x",
+    "defined_in": "2",
+    "defined_at_page": 6,
+    "used_in": [
+      "1",
+      "2",
+      "4.2"
+    ]
+  },
+  {
+    "symbol": "ln(x)",
+    "meaning": "Natural logarithm",
+    "defined_in": null,
+    "defined_at_page": null,
+    "used_in": [
+      "1"
+    ]
+  },
+  {
+    "symbol": "ln0 = -\u221e, e^{-\u221e} = 0",
+    "meaning": "Extended real arithmetic identities required for correct evaluation of EML-compiled expressions",
+    "defined_in": null,
+    "defined_at_page": null,
+    "used_in": [
+      "4.1"
+    ]
+  },
+  {
+    "symbol": "lny",
+    "meaning": "Second input to the EML Sheffer operator, representing the argument of the logarithm component",
+    "defined_in": "4.2",
+    "defined_at_page": 12,
+    "used_in": [
+      "4.2"
+    ]
+  },
+  {
+    "symbol": "log_x(y)",
+    "meaning": "Arbitrary base x logarithm of y",
+    "defined_in": null,
+    "defined_at_page": null,
+    "used_in": [
+      "1",
+      "3"
+    ]
+  },
+  {
+    "symbol": "minus(x)",
+    "meaning": "Sign flip unary function -x",
+    "defined_in": "4.2",
+    "defined_at_page": 12,
+    "used_in": [
+      "1",
+      "4.2"
+    ]
+  },
+  {
+    "symbol": "pow(x,y)",
+    "meaning": "Exponentiation x^y",
+    "defined_in": null,
+    "defined_at_page": null,
+    "used_in": [
+      "1"
+    ]
+  },
+  {
+    "symbol": "pre(x)",
+    "meaning": "Predecessor function: x - 1",
+    "defined_in": "2",
+    "defined_at_page": 6,
+    "used_in": [
+      "2"
+    ]
+  },
+  {
+    "symbol": "sqr(x)",
+    "meaning": "Square function x^2",
+    "defined_in": null,
+    "defined_at_page": null,
+    "used_in": [
+      "1"
+    ]
+  },
+  {
+    "symbol": "suc(x)",
+    "meaning": "Successor function: x + 1",
+    "defined_in": "2",
+    "defined_at_page": 6,
+    "used_in": [
+      "2"
+    ]
+  },
+  {
+    "symbol": "\u03b3",
+    "meaning": "Euler-Mascheroni constant (~0.577216), used as a transcendental test value for x",
+    "defined_in": null,
+    "defined_at_page": null,
+    "used_in": [
+      "2"
+    ]
+  },
+  {
+    "symbol": "\u03c3(x)",
+    "meaning": "Logistic sigmoid function 1/(1+e^{-x})",
+    "defined_in": null,
+    "defined_at_page": null,
+    "used_in": [
+      "1"
+    ]
+  }
+]
