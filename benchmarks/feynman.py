@@ -281,7 +281,10 @@ def main():
     p = argparse.ArgumentParser(description="Feynman benchmark for eml-sr")
     p.add_argument("--all", action="store_true", help="Run all problems (else first 8)")
     p.add_argument("--max-depth", type=int, default=4)
-    p.add_argument("--tries", type=int, default=8)
+    # Issue #11 recommended ≥16 seeds for the multi-depth ladder in CI runs.
+    # Depth-3 targets (e.g. ln(x)) need ≥8 reliably; deeper or noisier
+    # targets benefit from the extra headroom.
+    p.add_argument("--tries", type=int, default=16)
     # Defaults retuned in issue #11. Key finding: ANY normalization (minmax
     # or standard) destroys symbolic recoverability for nonlinear targets,
     # because the affine transform of an elementary function is generally
