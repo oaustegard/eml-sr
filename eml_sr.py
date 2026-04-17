@@ -351,6 +351,74 @@ def _simplify(expr: str) -> str:
         return expr
 
 
+def reachable_exprs(depth: int, n_vars: int = 1) -> set:
+    """Enumerate all simplified expressions reachable by a snapped EML tree.
+
+    Useful for vocabulary-reachability sanity checks (issue #11): if a
+    target formula is not in `reachable_exprs(depth)`, no amount of seed
+    budget will recover it at that depth.
+
+    Args:
+        depth: tree depth (0 = single leaf, 1 = one eml node, …)
+        n_vars: number of input variables (default 1 for univariate)
+
+    Returns:
+        set of simplified expression strings
+
+    Notes:
+        - Depth grows the enumeration exponentially: at depth 3 with n_vars=1,
+          we enumerate 2^(2^3) · 3^(2^3 · 2) = 256 · 6561 = ~1.7M raw trees
+          before simplification. Call with caution for depth ≥ 3.
+        - The simplifier collapses many trees to the same expression
+          (e.g. depth-1 has 2² · 3² = 36 raw trees → 4 simplified atoms).
+    """
+    import itertools
+
+    # Leaves: {1, x₁, …, xₙ}. Pre-snap labels.
+    leaf_labels = ["1"] + ([f"x{i+1}" for i in range(n_vars)] if n_vars > 1 else ["x"])
+
+    # Depth 0: single leaf, no gates.
+    if depth == 0:
+        return set(leaf_labels)
+
+    n_leaves = 2 ** depth
+    n_internal = n_leaves - 1
+
+    # Gate options: {1, x₁, …, xₙ, child}
+    # For enumeration purposes, we index 0=1, 1..n_vars=vars, n_vars+1=child.
+    n_gate_options = n_vars + 2
+
+    results: set = set()
+
+    # Iterate all leaf assignments × all gate assignments.
+    # leaves: n_leaves × (n_vars + 1) options
+    # gates: n_internal × 2 × n_gate_options options
+    leaf_space = itertools.product(range(n_vars + 1), repeat=n_leaves)
+    for leaves in leaf_space:
+        gate_space = itertools.product(
+            range(n_gate_options), repeat=n_internal * 2
+        )
+        for flat_gates in gate_space:
+            # Reshape flat_gates to (n_internal, 2)
+            gates = [
+                (flat_gates[2 * i], flat_gates[2 * i + 1])
+                for i in range(n_internal)
+            ]
+            exprs = [leaf_labels[c] for c in leaves]
+            node_idx = 0
+            while len(exprs) > 1:
+                new_exprs = []
+                for i in range(0, len(exprs), 2):
+                    lc, rc = gates[node_idx]
+                    left = _resolve_gate(lc, exprs[i], n_vars)
+                    right = _resolve_gate(rc, exprs[i + 1], n_vars)
+                    new_exprs.append(f"eml({left}, {right})")
+                    node_idx += 1
+                exprs = new_exprs
+            results.add(_simplify(exprs[0]))
+    return results
+
+
 # ─── Training ──────────────────────────────────────────────────
 
 def _train_one(
@@ -478,7 +546,12 @@ def discover(
 
     best_overall = None
 
-    for depth in range(1, max_depth + 1):
+    # The ladder starts at depth 0 — a single-leaf tree that emits either
+    # the constant 1 or the variable x. Issue #11 diagnosed that the
+    # absence of this "passthrough leaf" made the identity `y = x`
+    # unreachable until depth ≥ 4 (every gated output is wrapped in an
+    # outer `eml(·,·)`). The leaf-only tree closes that gap.
+    for depth in range(0, max_depth + 1):
         n_leaves = 2 ** depth
         n_internal = n_leaves - 1
         n_params = n_leaves * 2 + n_internal * 2 * 3
@@ -956,6 +1029,33 @@ def discover_curriculum(
     y_t = torch.tensor(y, dtype=DTYPE)
 
     best_overall = None
+
+    # Depth-0 pre-check: the curriculum's growing tree starts at depth 1,
+    # but the atoms `y = 1` and `y = x` are reachable one depth shallower
+    # (a single-leaf tree, no gates). Try those two snaps explicitly before
+    # kicking off the (more expensive) growing loop. See issue #11.
+    with torch.no_grad():
+        for leaf_choice, label in ((0, "1"), (1, "x")):
+            probe = EMLTree1D(depth=0)
+            new_leaf = torch.full_like(probe.leaf_logits, -50.0)
+            new_leaf[0, leaf_choice] = 50.0
+            probe.leaf_logits.copy_(new_leaf)
+            pred_s, _, _ = probe(x_t, tau=0.01)
+            mse_s = torch.mean((pred_s - y_t).abs() ** 2).real.item()
+            if mse_s < success_threshold:
+                if verbose:
+                    print(f"  ✓ Depth-0 atom matches: y = {label} "
+                          f"(rmse={math.sqrt(max(mse_s, 0)):.3e})")
+                return {
+                    "expr": label,
+                    "depth": 0,
+                    "snap_rmse": math.sqrt(max(mse_s, 0)),
+                    "snapped_tree": probe,
+                    "n_uncertain": 0,
+                    "n_splits": 0,
+                    "seed": 0,
+                    "exact": True,
+                }
 
     for seed in range(n_tries):
         torch.manual_seed(seed)
