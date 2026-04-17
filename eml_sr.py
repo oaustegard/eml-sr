@@ -1229,67 +1229,173 @@ def discover_curriculum(
 class Normalizer:
     """Affine normalizer with invertible transform/inverse for x and y.
 
+    Supports both univariate (1D) and multivariate (2D) inputs for x.
+    The y target is always treated as scalar — regression problems here
+    are single-output.
+
+    For 1D input, ``x_a`` and ``x_b`` are Python floats (byte-for-byte
+    backward compatible with the pre-#17 scalar surface). For 2D input
+    of shape ``(n_samples, n_vars)``, they are 1D numpy arrays of length
+    ``n_vars`` — one affine pair per column. ``transform_x`` / ``inverse_x``
+    rely on NumPy broadcasting to handle both cases through the same code.
+
     Stored as a plain dict-friendly object so it can be pickled into pool
-    workers and serialized alongside results.
+    workers and serialized alongside results. See ``to_dict()`` for the
+    JSON-safe form (arrays become lists).
     """
 
-    def __init__(self, x_a: float, x_b: float, y_a: float, y_b: float, mode: str):
+    def __init__(self, x_a, x_b, y_a: float, y_b: float, mode: str):
         # x' = x_a * x + x_b   ;   y' = y_a * y + y_b
-        self.x_a = float(x_a)
-        self.x_b = float(x_b)
+        #
+        # x_a/x_b may be scalar (Python number, 0-d array) or 1D array
+        # (per-column affines for 2D inputs). y is always scalar.
+        x_a_arr = np.asarray(x_a, dtype=np.float64)
+        x_b_arr = np.asarray(x_b, dtype=np.float64)
+        if x_a_arr.ndim > 1 or x_b_arr.ndim > 1:
+            raise ValueError(
+                f"x_a and x_b must be scalar or 1D; got shapes "
+                f"{x_a_arr.shape} and {x_b_arr.shape}"
+            )
+        if x_a_arr.shape != x_b_arr.shape:
+            raise ValueError(
+                f"x_a and x_b must have matching shapes; got "
+                f"{x_a_arr.shape} vs {x_b_arr.shape}"
+            )
+
+        if x_a_arr.ndim == 0:
+            # Scalar path: preserve the Python-float surface.
+            self.x_a = float(x_a_arr)
+            self.x_b = float(x_b_arr)
+        else:
+            self.x_a = x_a_arr
+            self.x_b = x_b_arr
+
         self.y_a = float(y_a)
         self.y_b = float(y_b)
         self.mode = mode
 
+    @property
+    def n_vars(self) -> int:
+        """Number of input variables (1 for scalar/1D inputs)."""
+        if isinstance(self.x_a, float):
+            return 1
+        return int(self.x_a.shape[0])
+
     @classmethod
-    def fit(cls, x: np.ndarray, y: np.ndarray, mode: str = "minmax",
+    def fit(cls, X: np.ndarray, y: np.ndarray, mode: str = "minmax",
             target_lo: float = -1.0, target_hi: float = 1.0) -> "Normalizer":
-        x = np.asarray(x, dtype=np.float64)
-        y = np.asarray(y, dtype=np.float64)
-        if mode == "none":
-            return cls(1.0, 0.0, 1.0, 0.0, mode)
-        if mode == "minmax":
-            def _ab(v):
+        """Fit a normalizer to ``X`` and ``y``.
+
+        ``X`` may be 1D ``(n_samples,)`` — the legacy univariate surface —
+        or 2D ``(n_samples, n_vars)`` for multivariate inputs. ``y`` is
+        flattened to 1D (so column-vector targets like ``(n, 1)`` are
+        also accepted).
+        """
+        X = np.asarray(X, dtype=np.float64)
+        y = np.asarray(y, dtype=np.float64).ravel()
+        if X.ndim > 2:
+            raise ValueError(
+                f"X must be 1D or 2D; got shape {X.shape} (ndim={X.ndim})"
+            )
+
+        # y affine — always scalar. Shared helper.
+        def _ab_scalar(v: np.ndarray, mode_: str):
+            if mode_ == "none":
+                return 1.0, 0.0
+            if mode_ == "minmax":
                 lo, hi = float(v.min()), float(v.max())
                 if hi == lo:
-                    return 0.0, 0.0  # constant column collapses to 0
+                    return 0.0, 0.0
                 a = (target_hi - target_lo) / (hi - lo)
                 b = target_lo - a * lo
                 return a, b
-            xa, xb = _ab(x)
-            ya, yb = _ab(y)
-            return cls(xa, xb, ya, yb, mode)
-        if mode == "standard":
-            def _ab(v):
+            if mode_ == "standard":
                 mu = float(v.mean())
                 sd = float(v.std())
                 if sd < 1e-12:
                     return 0.0, 0.0
                 return 1.0 / sd, -mu / sd
-            xa, xb = _ab(x)
-            ya, yb = _ab(y)
-            return cls(xa, xb, ya, yb, mode)
-        raise ValueError(f"unknown normalization mode: {mode!r}")
+            raise ValueError(f"unknown normalization mode: {mode_!r}")
+
+        # x affine — vectorized when X is 2D. Constant columns collapse
+        # to (0, 0), matching the scalar semantics element-wise.
+        def _ab_vec(V: np.ndarray, mode_: str):
+            n_vars = V.shape[1]
+            if mode_ == "none":
+                return np.ones(n_vars), np.zeros(n_vars)
+            if mode_ == "minmax":
+                lo = V.min(axis=0)
+                hi = V.max(axis=0)
+                rng = hi - lo
+                safe_rng = np.where(rng == 0, 1.0, rng)  # guard /0
+                a = np.where(rng == 0, 0.0,
+                             (target_hi - target_lo) / safe_rng)
+                b = np.where(rng == 0, 0.0, target_lo - a * lo)
+                return a, b
+            if mode_ == "standard":
+                mu = V.mean(axis=0)
+                sd = V.std(axis=0)
+                safe_sd = np.where(sd < 1e-12, 1.0, sd)  # guard /0
+                a = np.where(sd < 1e-12, 0.0, 1.0 / safe_sd)
+                b = np.where(sd < 1e-12, 0.0, -mu / safe_sd)
+                return a, b
+            raise ValueError(f"unknown normalization mode: {mode_!r}")
+
+        if mode not in {"none", "minmax", "standard"}:
+            raise ValueError(f"unknown normalization mode: {mode!r}")
+
+        if X.ndim == 1:
+            xa, xb = _ab_scalar(X, mode)
+        else:
+            xa, xb = _ab_vec(X, mode)
+        ya, yb = _ab_scalar(y, mode)
+        return cls(xa, xb, ya, yb, mode)
 
     def transform_x(self, x):
+        # Broadcasting handles both (batch,) and (batch, n_vars) —
+        # scalar x_a/x_b multiply elementwise, 1D x_a/x_b broadcast
+        # over the row axis of 2D x.
         return self.x_a * x + self.x_b
 
     def transform_y(self, y):
         return self.y_a * y + self.y_b
 
     def inverse_x(self, xp):
-        return (xp - self.x_b) / self.x_a if self.x_a != 0 else np.zeros_like(xp)
+        if isinstance(self.x_a, float):
+            # Scalar path — byte-for-byte the legacy behaviour.
+            return (xp - self.x_b) / self.x_a if self.x_a != 0 \
+                else np.zeros_like(xp)
+        # Vector path: per-column constant columns (x_a == 0) collapse
+        # to zero in the inverse, matching the scalar case element-wise.
+        xp = np.asarray(xp)
+        a = self.x_a            # (n_vars,)
+        b = self.x_b            # (n_vars,)
+        safe_a = np.where(a == 0, 1.0, a)
+        result = (xp - b) / safe_a          # broadcasts over rows
+        return np.where(a == 0, 0.0, result)  # zero-out dead columns
 
     def inverse_y(self, yp):
-        return (yp - self.y_b) / self.y_a if self.y_a != 0 else np.zeros_like(yp)
+        return (yp - self.y_b) / self.y_a if self.y_a != 0 \
+            else np.zeros_like(yp)
 
     def describe(self) -> str:
-        return (f"x' = {self.x_a:.6g} * x + {self.x_b:.6g}   "
-                f"y' = {self.y_a:.6g} * y + {self.y_b:.6g}   "
-                f"(mode={self.mode})")
+        if isinstance(self.x_a, float):
+            return (f"x' = {self.x_a:.6g} * x + {self.x_b:.6g}   "
+                    f"y' = {self.y_a:.6g} * y + {self.y_b:.6g}   "
+                    f"(mode={self.mode})")
+        # Per-column format for 2D: x1' = ..., x2' = ..., then y'.
+        parts = [f"x{i+1}' = {float(a):.6g} * x{i+1} + {float(b):.6g}"
+                 for i, (a, b) in enumerate(zip(self.x_a, self.x_b))]
+        parts.append(f"y' = {self.y_a:.6g} * y + {self.y_b:.6g}")
+        return "   ".join(parts) + f"   (mode={self.mode})"
 
     def to_dict(self) -> dict:
-        return {"x_a": self.x_a, "x_b": self.x_b,
+        # JSON-serializable: arrays → lists.
+        xa = self.x_a.tolist() if isinstance(self.x_a, np.ndarray) \
+            else self.x_a
+        xb = self.x_b.tolist() if isinstance(self.x_b, np.ndarray) \
+            else self.x_b
+        return {"x_a": xa, "x_b": xb,
                 "y_a": self.y_a, "y_b": self.y_b, "mode": self.mode}
 
 
