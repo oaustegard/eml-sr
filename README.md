@@ -3,7 +3,7 @@
 **EML Symbolic Regression** — discover elementary formulas from data using a single operator.
 
 Based on [Odrzywolek (2026)](https://arxiv.org/abs/2603.21852), "All elementary functions from a single operator":
-the operator `eml(x, y) = exp(x) - ln(y)`, together with the constant `1`, generates all standard
+the EML operator `eml(x, y) = exp(x) - ln(y)` (Exponent Minus Log), together with the constant `1`, generates all standard
 elementary functions. This makes `S → 1 | x | eml(S, S)` a complete, regular search space for
 symbolic regression.
 
