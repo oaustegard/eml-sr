@@ -36,10 +36,17 @@ AST rewriter that applies EML identities (e.g. `eml(1, eml(eml(1, x), 1)) → ln
 
 | Target | Depth | RMSE |
 |--------|-------|------|
+| `x` (identity) | 0 | 0 |
+| `1` (constant) | 0 | 0 |
 | `exp(x)` | 1 | 4.6e-16 |
 | `e` (constant) | 1 | 0 |
 | `ln(x)` | 3 | 7.3e-17 |
 | `exp(x) - ln(x)` | 1 | 3.2e-16 |
+
+Depth 0 is a single leaf with no gates — the "passthrough" vocabulary
+`{1, x}`. Without it, the identity `y = x` is unreachable until depth ≥ 4,
+because every gated output is wrapped in an outer `eml(·,·)`. The depth
+ladder in `discover()` now starts at 0 to close that gap (issue #11).
 
 ## Curriculum learning (growing trees)
 

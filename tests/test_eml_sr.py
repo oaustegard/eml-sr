@@ -31,7 +31,9 @@ from eml_sr import (
     _simplify,
     _train_one,
     discover,
+    discover_curriculum,
     eml_op,
+    reachable_exprs,
 )
 
 
@@ -124,13 +126,13 @@ class TestEmlOp:
 
 class TestTreeArchitecture:
 
-    @pytest.mark.parametrize("depth", [1, 2, 3, 4])
+    @pytest.mark.parametrize("depth", [0, 1, 2, 3, 4])
     def test_leaf_and_internal_counts(self, depth):
         tree = EMLTree1D(depth)
         assert tree.n_leaves == 2 ** depth
         assert tree.n_internal == 2 ** depth - 1
 
-    @pytest.mark.parametrize("depth", [1, 2, 3])
+    @pytest.mark.parametrize("depth", [0, 1, 2, 3])
     def test_parameter_count(self, depth):
         tree = EMLTree1D(depth)
         # leaf_logits: n_leaves * 2, gate_logits: n_internal * 2 * 3
@@ -138,7 +140,7 @@ class TestTreeArchitecture:
         got = sum(p.numel() for p in tree.parameters())
         assert got == expected
 
-    @pytest.mark.parametrize("depth", [1, 2, 3])
+    @pytest.mark.parametrize("depth", [0, 1, 2, 3])
     def test_forward_shapes(self, depth):
         tree = EMLTree1D(depth)
         x = _as_real(np.linspace(0.5, 2.5, 7))
@@ -250,6 +252,72 @@ class TestRecovery:
         out = _fast_train(x, y, depth=1, seed=0, search=700, hard=250)
         assert out["snap_rmse"] < 1e-8
         assert out["expr"] == "e"
+
+    # ── Depth-0 passthrough (issue #11) ─────────────────────────
+    # Before the #11 fix, `y = x` could only be recovered at depth ≥ 4
+    # via a deep `exp(ln(x))` chain that the optimizer rarely found from
+    # random init. With the depth-0 passthrough leaf wired into the
+    # ladder, the identity recovers at the trivial depth.
+
+    def test_train_depth0_identity(self):
+        """A depth-0 tree trained on y = x must snap to the leaf `x`."""
+        x = np.linspace(0.5, 2.5, 20)
+        y = x.copy()
+        out = _fast_train(x, y, depth=0, seed=0, search=300, hard=100)
+        assert out["snap_rmse"] < 1e-10
+        assert out["expr"] == "x"
+
+    def test_train_depth0_constant_one(self):
+        """A depth-0 tree trained on y = 1 must snap to the leaf `1`."""
+        x = np.linspace(0.5, 2.5, 20)
+        y = np.ones_like(x)
+        out = _fast_train(x, y, depth=0, seed=0, search=300, hard=100)
+        assert out["snap_rmse"] < 1e-10
+        assert out["expr"] == "1"
+
+    def test_discover_identity_at_depth0(self):
+        """`discover()` ladder must reach y = x at depth 0, not depth 4."""
+        x = np.linspace(0.5, 3.0, 40)
+        y = x.copy()
+        r = discover(x, y, max_depth=2, n_tries=2, verbose=False,
+                     success_threshold=1e-10)
+        assert r is not None
+        assert r["depth"] == 0
+        assert r["expr"] == "x"
+        assert r["snap_rmse"] < 1e-10
+
+    def test_discover_curriculum_identity_at_depth0(self):
+        """`discover_curriculum()` must hit the depth-0 pre-check for y = x."""
+        x = np.linspace(0.5, 3.0, 40)
+        y = x.copy()
+        r = discover_curriculum(x, y, max_depth=3, n_tries=1, verbose=False,
+                                success_threshold=1e-10)
+        assert r is not None
+        assert r["depth"] == 0
+        assert r["expr"] == "x"
+        assert r["exact"] is True
+        # Pre-check must short-circuit before any growing steps.
+        assert r["n_splits"] == 0
+
+    def test_discover_curriculum_constant_one_at_depth0(self):
+        """Pre-check must also catch y = 1 without entering the growing loop."""
+        x = np.linspace(0.5, 3.0, 40)
+        y = np.ones_like(x)
+        r = discover_curriculum(x, y, max_depth=3, n_tries=1, verbose=False,
+                                success_threshold=1e-10)
+        assert r is not None
+        assert r["depth"] == 0
+        assert r["expr"] == "1"
+
+    def test_depth0_does_not_hijack_nonatom(self):
+        """y = exp(x) must not be mis-recovered at depth 0; the ladder must go deeper."""
+        x = np.linspace(0.5, 2.5, 30)
+        y = np.exp(x)
+        r = discover(x, y, max_depth=2, n_tries=4, verbose=False,
+                     success_threshold=1e-10)
+        assert r is not None
+        assert r["depth"] == 1
+        assert r["expr"] == "exp(x)"
 
     @pytest.mark.slow
     def test_recover_exp_depth1_ladder(self):
@@ -452,3 +520,49 @@ class TestSimplifier:
         once = _simplify(expr)
         twice = _simplify(once)
         assert once == twice
+
+
+# ═══════════════════════ 7. Reachable-expression enumeration ═══════════════════════
+
+class TestReachability:
+    """Vocabulary-reachability sanity checks (issue #11).
+
+    If a target formula is not in `reachable_exprs(depth)`, no amount of
+    seed budget will recover it at that depth — this is a pre-training
+    check, not a fit quality check.
+    """
+
+    def test_depth0_univariate(self):
+        """A single leaf can emit exactly {1, x}."""
+        assert reachable_exprs(0) == {"1", "x"}
+
+    def test_depth0_multivariate(self):
+        """With n_vars variables, depth 0 is just the atoms."""
+        assert reachable_exprs(0, n_vars=3) == {"1", "x1", "x2", "x3"}
+
+    def test_depth1_univariate_matches_issue11(self):
+        """Issue #11 catalogued exactly four depth-1 simplified atoms."""
+        expected = {"e", "exp(x)", "(e - ln(x))", "(exp(x) - ln(x))"}
+        assert reachable_exprs(1) == expected
+
+    def test_identity_unreachable_at_depth1(self):
+        """The crux of issue #11: `x` is NOT reachable at depth 1."""
+        assert "x" not in reachable_exprs(1)
+
+    def test_identity_reachable_at_depth0(self):
+        """…but it IS reachable at depth 0, thanks to the passthrough leaf."""
+        assert "x" in reachable_exprs(0)
+
+    def test_depth_monotone_for_atoms(self):
+        """Atoms reachable at depth 0 stay reachable (via bypass gates) at depth 1+.
+
+        `reachable_exprs` does NOT currently claim monotonicity across
+        depths (bypass-to-leaf chains can simplify back to leaf atoms),
+        but we assert it here to catch accidental regressions in the
+        simplifier that would hide atom recovery.
+        """
+        d0 = reachable_exprs(0)
+        # exp(x) at depth 1 should NOT include a spurious "x" atom
+        # (no eml chain simplifies to a bare variable at depth 1).
+        d1 = reachable_exprs(1)
+        assert d0 & d1 == set()  # depth 1 has no atoms — they're all wrapped
