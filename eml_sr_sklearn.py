@@ -6,17 +6,21 @@ module exposes `EMLRegressor`, a thin sklearn-style estimator that wraps
 `eml_sr.discover` / `discover_curriculum` and stores the snapped torch
 tree for prediction.
 
-Limitation: eml-sr is *univariate* (Direction D from the Odrzywolek paper).
-SRBench problems are typically multivariate. `fit(X, y)` will accept a
-single column, or — when `auto_project=True` — pick the column with the
-highest absolute Spearman correlation with y and treat it as the active
-input. This is enough to put eml-sr on the leaderboard for univariate /
-near-univariate problems and to flag the limitation cleanly for the rest.
+eml-sr natively supports multivariate inputs via the Odrzywolek §4.3
+master formula (PR #15 for the forward pass, #18 for curriculum growing,
+#17 for per-column normalization). `EMLRegressor` passes `X` with any
+number of columns straight through by default.
+
+The legacy univariate-projection behaviour is still available via
+``auto_project=True``: when set, `EMLRegressor` picks the single column
+of `X` with the highest absolute Spearman correlation against `y` and
+discards the rest. This used to be the default; as of #19 it is off by
+default but available for explicit univariate-only runs.
 
 Usage (SRBench-style)::
 
     est = EMLRegressor(max_depth=4, n_tries=16, n_workers=8)
-    est.fit(X, y)
+    est.fit(X, y)                # X can be (n,) or (n, n_vars)
     yhat = est.predict(X_test)
     print(est.model_)            # symbolic expression in normalized coords
     print(est.original_model_)   # with the affine substitution applied
@@ -54,7 +58,7 @@ def _spearman_abs(col: np.ndarray, y: np.ndarray) -> float:
 
 
 class EMLRegressor:
-    """sklearn-style univariate symbolic regressor backed by eml-sr.
+    """sklearn-style symbolic regressor backed by eml-sr.
 
     Parameters
     ----------
@@ -67,12 +71,16 @@ class EMLRegressor:
         leaf-splitting growing tree (better for deep formulas).
     normalize : {"minmax", "standard", "none"}
         Affine pre-scaling. EML overflows easily on raw data; "minmax" is
-        the safest default for arbitrary CSVs.
+        the safest default for arbitrary CSVs. Per-column affines are used
+        for multi-variable `X` (see `Normalizer` and PR #17).
     n_workers : int
         Parallel workers used by `discover` (curriculum is serial).
     auto_project : bool
-        If `X` has more than one column, pick the column with the highest
-        |Spearman| against `y` and use that as the univariate input.
+        Legacy univariate mode. If `True` and `X` has more than one column,
+        pick the column with the highest |Spearman| against `y` and use
+        that single column as the input. Default is `False` — `X` is
+        passed through natively as a multivariate input, using the
+        multivariate forward pass added in #15.
     success_threshold : float
         MSE threshold below which a fit is reported as exact.
     verbose : bool
@@ -86,7 +94,7 @@ class EMLRegressor:
         method: str = "discover",
         normalize: str = "minmax",
         n_workers: int = 1,
-        auto_project: bool = True,
+        auto_project: bool = False,
         success_threshold: float = 1e-10,
         verbose: bool = False,
     ):
@@ -109,27 +117,32 @@ class EMLRegressor:
         if X.shape[0] != y.shape[0]:
             raise ValueError(f"X and y row counts differ: {X.shape[0]} vs {y.shape[0]}")
 
-        # Pick active column (univariate restriction).
-        if X.shape[1] == 1:
-            active = 0
-        elif self.auto_project:
+        # Legacy path: project multi-column X down to a single column via
+        # |Spearman| against y. Off by default; kept for explicit runs.
+        if X.shape[1] > 1 and self.auto_project:
             scores = [_spearman_abs(X[:, j], y) for j in range(X.shape[1])]
             active = int(np.argmax(scores))
             if self.verbose:
-                print(f"EMLRegressor: projecting onto column {active} "
+                print(f"EMLRegressor: auto_project → column {active} "
                       f"(|spearman|={scores[active]:.3f})")
+            X = X[:, active:active + 1]
+            self.active_col_ = active
         else:
-            raise ValueError(
-                f"EMLRegressor is univariate; got X with {X.shape[1]} columns "
-                "and auto_project=False. Set auto_project=True to pick the "
-                "best column automatically, or pass a single column."
-            )
+            # Native multivariate path. active_col_ set to None to signal
+            # "used all columns"; predict() keys off its type to decide
+            # whether to subset.
+            self.active_col_ = None
 
-        x = X[:, active]
-        self.active_col_ = active
-        self.normalizer_ = Normalizer.fit(x, y, mode=self.normalize)
-
-        x_n = self.normalizer_.transform_x(x)
+        self.n_vars_ = X.shape[1]
+        # Fit a normalizer over either (n,) (n_vars=1, preserving the
+        # legacy scalar surface) or (n, n_vars). The #17 Normalizer picks
+        # the right internal representation.
+        if self.n_vars_ == 1:
+            self.normalizer_ = Normalizer.fit(X[:, 0], y, mode=self.normalize)
+            x_n = self.normalizer_.transform_x(X[:, 0])
+        else:
+            self.normalizer_ = Normalizer.fit(X, y, mode=self.normalize)
+            x_n = self.normalizer_.transform_x(X)
         y_n = self.normalizer_.transform_y(y)
 
         if self.method == "curriculum":
@@ -165,9 +178,26 @@ class EMLRegressor:
         X = np.asarray(X, dtype=np.float64)
         if X.ndim == 1:
             X = X.reshape(-1, 1)
-        x = X[:, self.active_col_]
-        x_n = self.normalizer_.transform_x(x)
-        x_t = torch.tensor(x_n, dtype=REAL)
+
+        # Route through the stored normalizer + snapped tree. If fit()
+        # projected down to a single column (auto_project=True), honour
+        # that projection; otherwise pass all columns through.
+        if self.active_col_ is not None:
+            x_n = self.normalizer_.transform_x(X[:, self.active_col_])
+            x_t = torch.tensor(x_n, dtype=REAL)
+        else:
+            if X.shape[1] != self.n_vars_:
+                raise ValueError(
+                    f"predict: X has {X.shape[1]} columns, "
+                    f"fit was on {self.n_vars_}"
+                )
+            if self.n_vars_ == 1:
+                x_n = self.normalizer_.transform_x(X[:, 0])
+                x_t = torch.tensor(x_n, dtype=REAL)
+            else:
+                x_n = self.normalizer_.transform_x(X)
+                x_t = torch.tensor(x_n, dtype=REAL)
+
         with torch.no_grad():
             pred, _, _ = self.snapped_tree_(x_t, tau=0.01)
             yp_n = pred.real.detach().cpu().numpy()
@@ -198,17 +228,45 @@ class EMLRegressor:
     def original_model_(self) -> Optional[str]:
         """Symbolic expression with the normalizer's affine transform stitched in.
 
-        Returns a string like `(formula(0.5*x - 1.0) - 2.3) / 0.7`. Useful
-        for quick reading; not algebraically simplified.
+        For a univariate fit (one active column), returns a string like
+        ``(formula(0.5*x - 1.0) - 2.3) / 0.7``. For a multivariate fit,
+        each ``x_k`` is replaced with its per-column affine
+        ``(a_k*x_k + b_k)``. Not algebraically simplified — useful for
+        quick reading rather than downstream symbolic work.
         """
         if not getattr(self, "is_fitted_", False):
             return None
         import re
         n = self.normalizer_
-        x_sub = f"({n.x_a:.6g} * x + {n.x_b:.6g})"
-        # Word-boundary replace so we hit the standalone identifier `x`
-        # without touching `exp` or future identifiers that contain x.
-        formula = re.sub(r"\bx\b", x_sub, self.expr_)
+
+        # Build per-variable substitution map.
+        #
+        # Univariate fit: the model uses `x`. Substitute `x` with the
+        # scalar affine. (Legacy surface, byte-for-byte.)
+        #
+        # Multivariate fit: the model uses `x1, x2, ...`. Each is
+        # substituted with its own (a_k, b_k). Regex is applied
+        # longest-name-first so `x10` doesn't match `x1` mid-token.
+        subs = {}
+        if self.n_vars_ == 1:
+            # x_a/x_b are scalars in the 1D Normalizer path (see #17).
+            a = float(n.x_a if isinstance(n.x_a, float) else n.x_a[0])
+            b = float(n.x_b if isinstance(n.x_b, float) else n.x_b[0])
+            subs["x"] = f"({a:.6g} * x + {b:.6g})"
+        else:
+            # x_a/x_b are 1D arrays of length n_vars_.
+            for i in range(self.n_vars_):
+                a = float(n.x_a[i])
+                b = float(n.x_b[i])
+                subs[f"x{i+1}"] = f"({a:.6g} * x{i+1} + {b:.6g})"
+
+        formula = self.expr_
+        # Longest-first substitution prevents "x1" from partially matching
+        # "x10" (or "x" from matching "x1"/"exp").
+        for name in sorted(subs, key=len, reverse=True):
+            pattern = r"\b" + re.escape(name) + r"\b"
+            formula = re.sub(pattern, subs[name], formula)
+
         if n.y_a == 1.0 and n.y_b == 0.0:
             return formula
         return f"(({formula}) - {n.y_b:.6g}) / {n.y_a:.6g}"
