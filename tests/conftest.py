@@ -13,3 +13,9 @@ def pytest_configure(config):
         "markers",
         "slow: marks multi-seed recovery tests that run a full training ladder",
     )
+    config.addinivalue_line(
+        "markers",
+        "pysr: head-to-head PySR benchmark smoke tests; require PYSR_ENABLED=1 "
+        "and a working pysr + julia install. Skipped by default "
+        "(pysr is a heavy dependency). See benchmarks/pysr_compare.py.",
+    )
