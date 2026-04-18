@@ -125,6 +125,32 @@ python -m benchmarks.feynman --all --method curriculum  # full suite
 
 Each problem reports recovery success, RMSE, depth used, and time to solution.
 
+## Head-to-head vs PySR
+
+`benchmarks/pysr_compare.py` runs eml-sr and [PySR](https://github.com/MilesCranmer/PySR)
+(Cranmer, MIT) on the same target set and writes a comparison table to
+`benchmarks/pysr_compare.md`. It is gated behind `PYSR_ENABLED=1` because
+PySR needs a Julia toolchain — not something to impose on every CI run.
+
+```bash
+pip install pysr
+python -c "import pysr; pysr.install()"          # one-time Julia deps
+PYSR_ENABLED=1 python -m benchmarks.pysr_compare # full run
+PYSR_ENABLED=1 python -m benchmarks.pysr_compare --quick  # small slice
+pytest -m pysr                                   # smoke test
+```
+
+Without `PYSR_ENABLED`, the script still runs and reports eml-sr columns
+(PySR columns are marked "not run"). Useful as a plain eml-sr baseline.
+
+The benchmark is a *positioning tool*, not a speed competition. eml-sr's
+grammar uniformity (every node is `eml`) is its whole point; PySR's
+heterogeneous AST over `{+, -, *, /, exp, log, sqrt}` has different
+tradeoffs. The table makes the three axes concrete: grammar uniformity,
+exact recovery vs Pareto front, and expression length (EML trees for
+standard ops are long by design — multiplication is depth 8 in EML,
+depth 1 in a conventional SR AST).
+
 ## Performance
 
 - **`n_workers > 1`**: `discover()` accepts an `n_workers` argument that
@@ -196,6 +222,7 @@ enormous. Use `exp`/`ln` with complex arguments.
 | `eml_sr_sklearn.py` | sklearn-style `EMLRegressor` for SRBench |
 | `eml_compiler.py` | Forward direction: elementary expression → EML tree |
 | `benchmarks/feynman.py` | Univariate Feynman-equation benchmark |
+| `benchmarks/pysr_compare.py` | Head-to-head vs PySR (opt-in via `PYSR_ENABLED=1`) |
 | `legacy/eml_executor.mojo` | Original parabolic-attention stack machine (archived) |
 | `legacy/test_eml.mojo` | 109-test bootstrap chain verification (archived) |
 
