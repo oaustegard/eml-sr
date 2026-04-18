@@ -72,13 +72,80 @@ from eml_sr import REAL, discover, discover_curriculum, Normalizer  # noqa: E402
 
 @dataclass
 class FeynmanProblem:
+    """A Feynman benchmark target — univariate or multivariate.
+
+    Univariate (legacy, backward-compatible):
+
+        FeynmanProblem(
+            "eml.exp", "exp", "exp(x)", lambda x: np.exp(x),
+            x_range=(0.5, 2.5),
+        )
+
+    Multivariate (issue #20):
+
+        FeynmanProblem(
+            "II.2.42", "power-2var", "exp(x1) - ln(x2)",
+            lambda X: np.exp(X[:, 0]) - np.log(X[:, 1]),
+            n_vars=2, x_ranges=[(0.5, 2.5), (0.5, 3.0)],
+        )
+
+    Rules:
+      - ``n_vars == 1`` ⇒ ``fn`` receives a 1D ``x`` and returns a 1D ``y``.
+      - ``n_vars >= 2`` ⇒ ``fn`` receives a 2D ``X`` of shape
+        ``(n_samples, n_vars)`` and returns a 1D ``y``.
+      - Exactly one of ``x_range`` (univariate) or ``x_ranges``
+        (multivariate, list of per-column ``(lo, hi)`` tuples) must be
+        supplied. If ``x_range`` is given and ``x_ranges`` is not,
+        ``x_ranges`` is synthesized to ``[x_range]`` for uniformity; the
+        sampler still emits 1D when ``n_vars == 1``.
+    """
+
     feynman_id: str
     name: str           # short readable label
-    formula: str        # human-readable formula in terms of x
+    formula: str        # human-readable formula in terms of x / x1, x2, ...
     fn: Callable[[np.ndarray], np.ndarray]
-    x_range: tuple      # (lo, hi)
+    x_range: Optional[tuple] = None          # legacy univariate (lo, hi)
     n_samples: int = 100
     notes: str = ""
+    n_vars: int = 1
+    x_ranges: Optional[list] = None          # list of (lo, hi) per column
+
+    def __post_init__(self):
+        # Synthesize the full x_ranges list for uniform downstream access,
+        # while preserving the univariate sampler's 1D output.
+        if self.x_ranges is None:
+            if self.x_range is None:
+                raise ValueError(
+                    f"{self.feynman_id}: must supply x_range or x_ranges"
+                )
+            self.x_ranges = [self.x_range]
+        if len(self.x_ranges) != self.n_vars:
+            raise ValueError(
+                f"{self.feynman_id}: n_vars={self.n_vars} does not match "
+                f"len(x_ranges)={len(self.x_ranges)}"
+            )
+
+
+def _sample_X(prob: FeynmanProblem) -> np.ndarray:
+    """Generate inputs for a Feynman problem.
+
+    Univariate (``n_vars == 1``): returns a 1D ``linspace`` over the
+    single range — byte-identical to the legacy sampler so existing
+    univariate benchmarks reproduce exactly.
+
+    Multivariate (``n_vars >= 2``): returns a 2D array of shape
+    ``(n_samples, n_vars)`` where each column is an independent
+    uniform sample over its declared range. A fixed RNG seed keeps
+    runs reproducible across invocations.
+    """
+    if prob.n_vars == 1:
+        lo, hi = prob.x_ranges[0]
+        return np.linspace(lo, hi, prob.n_samples)
+    # Multivariate: per-column independent uniform samples.
+    # Seed by feynman_id so each problem has a stable sample set.
+    rng = np.random.default_rng(abs(hash(prob.feynman_id)) % (2**32))
+    cols = [rng.uniform(lo, hi, prob.n_samples) for (lo, hi) in prob.x_ranges]
+    return np.stack(cols, axis=1)
 
 
 # Helpers used by several problems ------------------------------------
@@ -171,6 +238,43 @@ PROBLEMS: list[FeynmanProblem] = [
         x_range=(0.5, 10.0),
         notes="gravitational PE, m=1 kg",
     ),
+
+    # ── Multivariate targets (issue #20) ────────────────────────
+    # The bivariate slice of eml-sr. These exist to exercise the
+    # 2D code paths end-to-end; the depth-1 atom below is the only
+    # one guaranteed to recover in the default n_tries budget. The
+    # harder ones (addition, division) push against the "search
+    # frontier" that Direction E set out to characterise.
+    FeynmanProblem(
+        "mv.eml", "bivariate-eml", "exp(x1) - ln(x2)",
+        lambda X: np.exp(X[:, 0]) - np.log(X[:, 1]),
+        n_vars=2, x_ranges=[(0.5, 2.5), (0.5, 3.0)],
+        notes="depth-1 bivariate atom — eml(x1, x2) directly",
+    ),
+    FeynmanProblem(
+        "mv.expsum", "exp-of-sum", "exp(x1 + x2) = exp(x1)*exp(x2)",
+        lambda X: np.exp(X[:, 0]) * np.exp(X[:, 1]),
+        n_vars=2, x_ranges=[(0.0, 1.0), (0.0, 1.0)],
+        notes="needs addition; depth 2+. Option A no; Option B via linear leaves",
+    ),
+    FeynmanProblem(
+        "II.6.15a", "coulomb-2var", "x1 / x2^2",
+        lambda X: X[:, 0] / (X[:, 1] ** 2),
+        n_vars=2, x_ranges=[(0.5, 3.0), (0.5, 3.0)],
+        notes="needs division; deep in EML chain — stress test",
+    ),
+    FeynmanProblem(
+        "mv.ln-ratio", "ln-ratio", "ln(x1) - ln(x2)",
+        lambda X: np.log(X[:, 0]) - np.log(X[:, 1]),
+        n_vars=2, x_ranges=[(0.5, 3.0), (0.5, 3.0)],
+        notes="two logs — representable at depth 2 via eml(0,x2)-eml(0,x1)-like",
+    ),
+    FeynmanProblem(
+        "mv.sum-exp", "sum-of-exps", "exp(x1) + exp(x2)",
+        lambda X: np.exp(X[:, 0]) + np.exp(X[:, 1]),
+        n_vars=2, x_ranges=[(0.0, 1.5), (0.0, 1.5)],
+        notes="sum of two exps — not a depth-1 atom; explores depth/search frontier",
+    ),
 ]
 
 
@@ -180,22 +284,22 @@ PROBLEMS: list[FeynmanProblem] = [
 def _run_one(prob: FeynmanProblem, *, max_depth: int, n_tries: int,
              method: str, normalize: str, n_workers: int,
              threshold: float) -> dict:
-    x = np.linspace(prob.x_range[0], prob.x_range[1], prob.n_samples)
-    y = prob.fn(x)
+    X = _sample_X(prob)
+    y = prob.fn(X)
 
-    norm = Normalizer.fit(x, y, mode=normalize)
-    x_n = norm.transform_x(x)
+    norm = Normalizer.fit(X, y, mode=normalize)
+    X_n = norm.transform_x(X)
     y_n = norm.transform_y(y)
 
     t0 = time.time()
     if method == "curriculum":
         result = discover_curriculum(
-            x_n, y_n, max_depth=max_depth, n_tries=n_tries,
+            X_n, y_n, max_depth=max_depth, n_tries=n_tries,
             verbose=False, success_threshold=threshold,
         )
     else:
         result = discover(
-            x_n, y_n, max_depth=max_depth, n_tries=n_tries,
+            X_n, y_n, max_depth=max_depth, n_tries=n_tries,
             verbose=False, success_threshold=threshold,
             n_workers=n_workers,
         )
@@ -215,7 +319,7 @@ def _run_one(prob: FeynmanProblem, *, max_depth: int, n_tries: int,
     rmse_orig = float("inf")
     if snapped is not None:
         with torch.no_grad():
-            pred_n, _, _ = snapped(torch.tensor(x_n, dtype=REAL), tau=0.01)
+            pred_n, _, _ = snapped(torch.tensor(X_n, dtype=REAL), tau=0.01)
             pred_n_np = pred_n.real.detach().numpy()
             pred_orig = norm.inverse_y(pred_n_np)
             rmse_orig = float(np.sqrt(np.mean((pred_orig - y) ** 2)))
