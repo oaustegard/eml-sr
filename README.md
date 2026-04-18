@@ -138,12 +138,63 @@ Each problem reports recovery success, RMSE, depth used, and time to solution.
   by growing the tree leaf-by-leaf, dramatically beating random init
   past depth 4.
 
+## Compiler: elementary expressions → EML trees
+
+The search direction (`data → formula`) has a complement: given an elementary
+formula, *emit* the pure EML tree that implements it. `eml_compiler.py` ports
+the JS reference compiler from [`austegard.com/fun-and-games/eml-calc.html`](https://austegard.com/fun-and-games/eml-calc.html)
+to Python and exposes it as a first-class module.
+
+```python
+from eml_compiler import compile_expr, eval_eml, to_string, tree_size, tree_depth
+
+tree = compile_expr("ln(x) + exp(y)")
+print(to_string(tree))             # eml(...) tree in eml_sr.to_expr format
+print(tree_size(tree), tree_depth(tree))
+eval_eml(tree, x=2.0, y=1.5).real  # ≈ 5.1746...
+```
+
+Or from the CLI:
+
+```
+$ python -m eml_compiler "ln(x) + exp(y)" --eval x=2 y=1.5
+eml(eml(1, eml(eml(1, eml(1, eml(eml(1, x), 1))), 1)), eml(y, 1))
+size:  29
+depth: 7
+value: (5.17463...+0j)
+```
+
+### Grammar relaxation
+
+The paper's pure grammar is `S → 1 | x | eml(S, S)`. The JS compiler and this
+port both default to the pragmatic relaxation `S → c | x | eml(S, S)` where
+arbitrary numeric constants and `π` ride as leaves rather than being
+bootstrapped from `{1}` (e.g. `π = −i·ln(−1)` produces an enormous tree).
+
+`compile_expr("2*x", strict=True)` fails with an explanatory error. Strict
+mode also reroutes negation through `eml_ln(1) = 0` so the compiled tree's
+leaves are all either `1` or a named variable — paper-faithful.
+
+### What it's for
+
+- **Ground-truth trees** for the test suite and benchmarks: given a Feynman
+  target formula, `compile_expr(formula)` yields the canonical EML tree whose
+  size / depth become the recovery target.
+- **Warm-start seeds** for `discover_curriculum`: compile a human guess,
+  perturb weights around it, let gradient descent refine.
+- **Round-trip** with `EMLTree1D.to_expr()`: a snapped tree's string form
+  parses back into an equivalent EML tree (verified in the test suite).
+
+Trig (`sin`, `cos`, `tan`) is out of scope per §4.1 — their EML trees are
+enormous. Use `exp`/`ln` with complex arguments.
+
 ## Files
 
 | File | Description |
 |------|-------------|
 | `eml_sr.py` | Symbolic regression engine + CLI (the product) |
 | `eml_sr_sklearn.py` | sklearn-style `EMLRegressor` for SRBench |
+| `eml_compiler.py` | Forward direction: elementary expression → EML tree |
 | `benchmarks/feynman.py` | Univariate Feynman-equation benchmark |
 | `legacy/eml_executor.mojo` | Original parabolic-attention stack machine (archived) |
 | `legacy/test_eml.mojo` | 109-test bootstrap chain verification (archived) |

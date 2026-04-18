@@ -78,6 +78,7 @@ These are fixed by the paper and must not drift during refactoring:
 | File | Role |
 |------|------|
 | `eml_sr.py` | Main engine. `EMLTree` (trainable binary tree), `discover()`, `discover_curriculum()`, CLI, simplifier. |
+| `eml_compiler.py` | Forward direction: elementary expression → pure EML tree. Port of the JS reference at `austegard.com/fun-and-games/eml-calc.html`. Has `parse`, `compile`, `eval_eml`, `tree_size`, `tree_depth`, `to_string`, CLI (`python -m eml_compiler`), and a `strict=True` paper-faithful mode. |
 | `eml_sr_sklearn.py` | `EMLRegressor` with `fit`/`predict` + `model_` attribute for SRBench compatibility. |
 | `eml_sr_hybrid.py` | Hybrid variant — see docstring; not the primary entry point. |
 | `eml_sr_linear.py` | Linear-combination variant — see docstring. |
