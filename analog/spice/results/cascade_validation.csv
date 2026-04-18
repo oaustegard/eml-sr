@@ -1,0 +1,2 @@
+n_points,spice_cascade_rmse,spice_intermediate_rmse,spice_max_abs_err,single_cell_rmse,noise_sim_additive_rmse,noise_sim_additive_std,noise_sim_bits,noise_sim_mult_rmse,ratio_spice_over_sim,margin_pct,verdict_within_30pct
+99,0.020334418266893257,0.009469296909669337,0.05390702804830716,0.010249254282169128,0.017239577529653494,0.0013169035096027531,7.287246885433831,0.016715858649269392,1.1795195231389157,17.951952313891574,PASS

@@ -1,0 +1,91 @@
+* =================================================================
+* cell_translinear.cir - single EML cell, translinear-style topology
+*
+* Computes V_out = exp(V_x) - ln(V_y) in math units.
+*
+* Translinear distinction (vs cell_opamp.cir):
+*   LOG arm  - op-amp transdiode (same as cell_opamp.cir; a precise
+*              log circuit always needs feedback to clamp the
+*              transdiode's input current).  Kept identical to the
+*              op-amp cell so the contrast is strictly the exp path.
+*   EXP arm  - single-BJT antilog with PASSIVE resistive load, no
+*              op-amp in the signal path.  V_BE is driven directly by
+*              the input divider; collector current is sensed as a
+*              voltage drop across R_load.
+*   SUB      - op-amp difference amplifier.
+*
+* Tradeoff:
+*   + No dominant pole from the exp-arm op-amp => ~10x wider -3 dB
+*     bandwidth than the op-amp cell.
+*   - V_CE(Q_exp) swings with the output, injecting Early-effect
+*     nonlinearity (quantified in the DC transfer test).
+*   - Rail clamps at V_cc (when I_C -> 0) and at V_cc - 15 V (rails).
+*
+* Valid input range: V_x in [-1, 1] V, V_y in [0.1, 2] V.
+* =================================================================
+
+.include models.lib
+
+Vcc vcc 0 15
+Vee vee 0 -15
+
+.param VX_DC=0.0 VY_DC=1.0
+Vx vx 0 {VX_DC}
+Vy vy 0 {VY_DC}
+
+.subckt opamp_g387 vin out vcc vee
+Rg fb 0 1k
+Rf fb out 37.7k
+Xo vin fb out vcc vee opamp
+.ends opamp_g387
+
+.subckt opamp_buf vin out vcc vee
+Xo vin out out vcc vee opamp
+.ends opamp_buf
+
+* ===== LOG ARM (op-amp transdiode, identical to cell_opamp.cir) ==
+.param R_LOG=100k
+
+Rlog_in  vy     n_log_sj {R_LOG}
+Qlog     n_log_sj  n_log_sj  vlog_raw  QNPN
+Xop_log  0 n_log_sj vlog_raw vcc vee opamp
+
+Vref1    vref1 0 1.0
+Rlog_ref vref1 n_logref_sj {R_LOG}
+Qlog_ref n_logref_sj  n_logref_sj  vlog_ref  QNPN_M
+Xop_ref  0 n_logref_sj vlog_ref vcc vee opamp
+
+* diffamp convention V_out = vb - va; raw >  ref when V_y > 1 => pass
+* (vlog_raw, vlog_ref) so result is ref - raw = -(V_T ln(V_y)).
+* That is negative of what we want; so pass (raw, ref) to get positive.
+Xdiff_log vlog_raw vlog_ref va vcc vee diffamp
+
+Xg_log va vlog vcc vee opamp_g387
+
+* ===== EXP ARM (passive translinear antilog) =====================
+.param R_EXP=100k
+
+* V_em calibrated for V_exp(V_x = 0) = 1 V.  Includes Early-effect
+* offset (V_CE ~ 14 V) vs the cell_opamp.cir topology where V_CE ~ 0.
+.param V_EM=-0.5445
+
+Rxdiv_t  vx     vx_s   9740
+Rxdiv_b  vx_s   0      260
+Vem      vem    0      {V_EM}
+
+Qxs      ncx    vx_s   vem    QNPN
+
+* PASSIVE LOAD - no op-amp in this transimpedance path
+Rload    vcc    ncx    {R_EXP}
+
+* High-input-impedance buffer to avoid loading ncx
+Xbuf_ncx ncx    ncx_b  vcc vee opamp_buf
+
+* V_exp = Vcc - V(ncx); diffamp: V_out = vb - va, so (ncx_b, vcc) -> V_exp
+Xsub_exp ncx_b  vcc    vexp   vcc vee diffamp
+
+* ===== SUBTRACTOR ================================================
+* V_out = V_exp - V_log; diffamp args (vlog, vexp) -> V_exp - V_log
+Xsub vlog vexp vout vcc vee diffamp
+
+.end

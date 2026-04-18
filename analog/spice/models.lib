@@ -1,0 +1,52 @@
+* ---------------------------------------------------------------
+* analog/spice/models.lib - device models for EML analog cells
+*
+* Keep parts choice localized here so netlists stay portable.
+* Models are Gummel-Poon NPN (2N3904-class) and a simple behavioural
+* op-amp macromodel approximating an OP07 (precision, low-offset).
+* Temperature parameters (XTI, EG, XTB) enable the temperature sweep.
+* ---------------------------------------------------------------
+
+* 2N3904-class NPN. Parameters tuned to match typical datasheet curves.
+* IS, BF, VAF dominate the log/exp small-signal behaviour.
+.model QNPN NPN(IS=6.734e-15 BF=416.4 VAF=74.03 IKF=0.06678 ISE=6.734e-15
++               NE=1.259 BR=0.7371 VAR=5 IKR=0 RB=10 RC=1
++               CJE=4.493p MJE=0.2593 VJE=0.75
++               CJC=3.638p MJC=0.3085 VJC=0.75
++               TF=301.2p TR=239.5n XTB=1.5 XTI=3 EG=1.11
++               KF=1e-16 AF=1)
+
+* Matched NPN pair - identical to QNPN but a separate name for clarity
+* (future mismatch can be introduced here via Monte Carlo)
+.model QNPN_M NPN(IS=6.734e-15 BF=416.4 VAF=74.03 IKF=0.06678 ISE=6.734e-15
++                 NE=1.259 BR=0.7371 VAR=5 IKR=0 RB=10 RC=1
++                 CJE=4.493p MJE=0.2593 VJE=0.75
++                 CJC=3.638p MJC=0.3085 VJC=0.75
++                 TF=301.2p TR=239.5n XTB=1.5 XTI=3 EG=1.11
++                 KF=1e-16 AF=1)
+
+* Simple behavioural op-amp subckt (OP07-like)
+*   - DC open-loop gain Aol = Gerr * Rerr = 1e6
+*   - GBW = Gerr / (2*pi*Cerr) ~ 0.6 MHz (single pole)
+*   - Dominant pole  = GBW / Aol ~ 0.6 Hz
+*   - Output clipping at rails - 0.2 V
+*   - Input-referred white noise 10 nV/rtHz (through Rnoise)
+.subckt opamp inp inm out vcc vee
+Rin inp inm 1e12
+Gerr 0 nerr inp inm 1.13e-4
+Rerr nerr 0 8.85e9
+Cerr nerr 0 30p
+Bclip out 0 V = max(V(vee)+0.2, min(V(vcc)-0.2, V(nerr)))
+Rnoise inm_noise 0 6.6k $ 6.6k at 300K => ~10 nV/rtHz
+.ends opamp
+
+* Diff-pair subtractor: V_out = V_b - V_a, gain 1
+* (4-resistor topology: second pin minus first pin; all 10k)
+.subckt diffamp va vb out vcc vee
+Ra1 va a  10k
+Ra2 a  ao 10k
+Rb1 vb b  10k
+Rb2 b  0  10k
+Xop1 b a ao vcc vee opamp
+Rof ao out 50
+.ends diffamp

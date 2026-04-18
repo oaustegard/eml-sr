@@ -1,0 +1,104 @@
+* =================================================================
+* cell_opamp.cir - single EML cell, op-amp + transdiode topology
+*
+* Computes V_out = exp(V_x) - ln(V_y) in "math units" where 1 V = 1
+* mathematical unit.  Valid input range:
+*   V_x in [-1, +1] V      (exp saturates outside this range)
+*   V_y in [ 0.1, 2.0] V   (log diverges at 0; rail clips at ~10 V)
+*
+* Architecture (all three stages use feedback op-amps - "closed loop"):
+*
+*   LOG arm  (transdiode with reference transdiode for Is/V_T tracking)
+*     Q_log  : transdiode, V_y / R_LOG forces I_C, V_BE = V_T ln(I / Is)
+*     Q_ref  : matched transdiode biased at I_ref = 1V / R_LOG
+*     diff   : V_BE(y) - V_BE(1) = V_T ln(V_y)
+*     gain   : x 1/V_T  yields ln(V_y)
+*
+*   EXP arm  (antilog with fixed-emitter reference bias)
+*     divider : V_x -> V_x * V_T/1V  (k ~ 25.85 mV/V)
+*     Q_exp  : base at V_x_scaled, emitter at fixed V_em = -V_T ln(I_ref/Is)
+*               I_C = I_ref exp(V_x)
+*     opamp  : transimpedance R_f, V_raw = -R_f I_ref exp(V_x)
+*     invert : V_exp = exp(V_x) with R_f I_ref = 1 V
+*
+*   SUBTRACTOR : V_out = V_exp - V_log = exp(V_x) - ln(V_y)
+*
+* Temperature compensation in the LOG arm is tight (matched pair cancels
+* Is and V_T).  The EXP arm's input divider (k = V_T/1V) is set by a
+* passive resistor ratio and will drift with T - the T-sweep analysis
+* exposes this as the dominant error source.
+*
+* Parts choice (swap here to try other devices):
+*   Q*     : QNPN (2N3904-class, see models.lib)
+*   opamp  : behavioural OP07-like subckt
+* =================================================================
+
+.include models.lib
+
+* ----- supplies -----
+Vcc vcc 0 15
+Vee vee 0 -15
+
+* ----- inputs (may be overridden by driver) -----
+.param VX_DC=0.0 VY_DC=1.0
+Vx vx 0 {VX_DC}
+Vy vy 0 {VY_DC}
+
+* Gain-of-38.7 non-inverting op-amp (1/V_T at 300K)
+.subckt opamp_g387 vin out vcc vee
+Rg fb 0 1k
+Rf fb out 37.7k
+Xo vin fb out vcc vee opamp
+.ends opamp_g387
+
+* ===== LOG ARM ===================================================
+.param R_LOG=100k
+
+* signal transdiode
+Rlog_in  vy     n_log_sj {R_LOG}
+Qlog     n_log_sj  n_log_sj  vlog_raw  QNPN
+Xop_log  0 n_log_sj vlog_raw vcc vee opamp
+
+* reference transdiode at 1 V / R_LOG
+Vref1    vref1  0    1.0
+Rlog_ref vref1  n_logref_sj {R_LOG}
+Qlog_ref n_logref_sj  n_logref_sj  vlog_ref  QNPN_M
+Xop_ref  0 n_logref_sj vlog_ref vcc vee opamp
+
+* diff: V_T ln(V_y) = vlog_ref - vlog_raw   (both outputs are negative V_BE)
+* diffamp convention is V_out = vb - va, so arg order is (raw, ref)
+Xdiff_log vlog_raw vlog_ref va vcc vee diffamp
+
+* post-gain x 1/V_T (at 300K ~ 38.7)
+Xg_log    va vlog vcc vee opamp_g387
+
+* ===== EXP ARM ===================================================
+* Divider: k = V_T/1V ~ 260/(9740+260) = 0.026
+Rxdiv_t  vx        vx_scaled  9740
+Rxdiv_b  vx_scaled 0          260
+
+* Fixed emitter-bias reference voltage so I_C(V_x=0) = I_ref = 10 uA
+* V_em = -V_T ln(I_ref / Is) = -25.85 mV * ln(10uA / 1e-14) ~ -535 mV
+* V_em calibrated empirically so that V_exp(V_x=0) = 1 V exactly
+* Analytical V_em = -V_T ln(I_ref/Is) ~ -0.546 V at T=300K; tuned for
+* VAF / ISE / op-amp finite-gain offsets in this specific model.
+.param V_EM=-0.5492
+Vem      vem 0 {V_EM}
+
+* Antilog transistor: base at V_x_scaled, emitter at V_em
+Qexp     n_exp_sj  vx_scaled  vem  QNPN
+
+* Transimpedance: V_raw = -R_F * I_C(exp)
+.param R_EXP=100k
+Rfexp    n_exp_sj  vexp_raw  {R_EXP}
+Xop_exp  0 n_exp_sj vexp_raw vcc vee opamp
+
+* vexp_raw is already the positive exp; expose it via a unity buffer
+Rbuf vexp_raw vexp 1
+Rload vexp 0 1Meg
+
+* ===== SUBTRACTOR ================================================
+* diffamp: V_out = vb - va; want V_out = V_exp - V_log, so args = (log, exp)
+Xsub vlog vexp vout vcc vee diffamp
+
+.end

@@ -1,0 +1,52 @@
+* =================================================================
+* cell_opamp_sub.cir - cell_opamp.cir as a reusable subcircuit
+*
+* Subckt: eml_cell_opamp
+*   Pins: vx  vy  vout  vcc  vee
+*
+* See cell_opamp.cir for the topology discussion.  This version is
+* meant to be instantiated twice (or more) for cascaded cells.
+* All internal node names are prefixed with the instance name by ngspice.
+* =================================================================
+
+.include models.lib
+
+.subckt opamp_g387 vin out vcc vee
+Rg fb 0 1k
+Rf fb out 37.7k
+Xo vin fb out vcc vee opamp
+.ends opamp_g387
+
+.subckt eml_cell_opamp vx vy vout vcc vee
+.param R_LOG=100k
+.param R_EXP=100k
+.param V_EM=-0.5492
+
+* ----- LOG ARM -----
+Rlog_in  vy     n_log_sj {R_LOG}
+Qlog     n_log_sj  n_log_sj  vlog_raw  QNPN
+Xop_log  0 n_log_sj vlog_raw vcc vee opamp
+
+Vref1    vref1 0 1.0
+Rlog_ref vref1  n_logref_sj {R_LOG}
+Qlog_ref n_logref_sj  n_logref_sj  vlog_ref  QNPN_M
+Xop_ref  0 n_logref_sj vlog_ref vcc vee opamp
+
+Xdiff_log vlog_raw vlog_ref va vcc vee diffamp
+Xg_log    va vlog vcc vee opamp_g387
+
+* ----- EXP ARM -----
+Rxdiv_t  vx        vx_s   9740
+Rxdiv_b  vx_s      0      260
+Vem      vem 0 {V_EM}
+Qexp     n_exp_sj  vx_s   vem  QNPN
+Rfexp    n_exp_sj  vexp_raw  {R_EXP}
+Xop_exp  0 n_exp_sj vexp_raw vcc vee opamp
+Rbuf vexp_raw vexp 1
+Rload vexp 0 1Meg
+
+* ----- SUBTRACTOR -----
+Xsub vlog vexp vout vcc vee diffamp
+.ends eml_cell_opamp
+
+.end
