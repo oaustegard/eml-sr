@@ -36,6 +36,8 @@ from eml_sr import (
     reachable_exprs,
 )
 
+from tests._helpers import eval_formula_univariate
+
 
 # ───────────────────────── helpers ──────────────────────────
 
@@ -240,7 +242,7 @@ class TestRecovery:
     def test_recover_exp_depth1_fast(self):
         """exp(x) at depth 1 — should succeed on seed 0 alone."""
         x = np.linspace(0.5, 2.5, 20)
-        y = np.exp(x)
+        y = eval_formula_univariate("exp(x)", x)
         out = _fast_train(x, y, depth=1, seed=0, search=700, hard=250)
         assert out["snap_rmse"] < 1e-8
         assert out["expr"] == "exp(x)"
@@ -248,7 +250,7 @@ class TestRecovery:
     def test_recover_constant_e_depth1_fast(self):
         """Constant `e` is depth 1 — routing picks child = eml(1,1) = exp(1) - ln(1) = e."""
         x = np.linspace(0.5, 2.5, 20)
-        y = np.full_like(x, np.e)
+        y = eval_formula_univariate("e", x)
         out = _fast_train(x, y, depth=1, seed=0, search=700, hard=250)
         assert out["snap_rmse"] < 1e-8
         assert out["expr"] == "e"
@@ -262,7 +264,7 @@ class TestRecovery:
     def test_train_depth0_identity(self):
         """A depth-0 tree trained on y = x must snap to the leaf `x`."""
         x = np.linspace(0.5, 2.5, 20)
-        y = x.copy()
+        y = eval_formula_univariate("x", x)
         out = _fast_train(x, y, depth=0, seed=0, search=300, hard=100)
         assert out["snap_rmse"] < 1e-10
         assert out["expr"] == "x"
@@ -270,7 +272,7 @@ class TestRecovery:
     def test_train_depth0_constant_one(self):
         """A depth-0 tree trained on y = 1 must snap to the leaf `1`."""
         x = np.linspace(0.5, 2.5, 20)
-        y = np.ones_like(x)
+        y = eval_formula_univariate("1", x)
         out = _fast_train(x, y, depth=0, seed=0, search=300, hard=100)
         assert out["snap_rmse"] < 1e-10
         assert out["expr"] == "1"
@@ -278,7 +280,7 @@ class TestRecovery:
     def test_discover_identity_at_depth0(self):
         """`discover()` ladder must reach y = x at depth 0, not depth 4."""
         x = np.linspace(0.5, 3.0, 40)
-        y = x.copy()
+        y = eval_formula_univariate("x", x)
         r = discover(x, y, max_depth=2, n_tries=2, verbose=False,
                      success_threshold=1e-10)
         assert r is not None
@@ -289,7 +291,7 @@ class TestRecovery:
     def test_discover_curriculum_identity_at_depth0(self):
         """`discover_curriculum()` must hit the depth-0 pre-check for y = x."""
         x = np.linspace(0.5, 3.0, 40)
-        y = x.copy()
+        y = eval_formula_univariate("x", x)
         r = discover_curriculum(x, y, max_depth=3, n_tries=1, verbose=False,
                                 success_threshold=1e-10)
         assert r is not None
@@ -302,7 +304,7 @@ class TestRecovery:
     def test_discover_curriculum_constant_one_at_depth0(self):
         """Pre-check must also catch y = 1 without entering the growing loop."""
         x = np.linspace(0.5, 3.0, 40)
-        y = np.ones_like(x)
+        y = eval_formula_univariate("1", x)
         r = discover_curriculum(x, y, max_depth=3, n_tries=1, verbose=False,
                                 success_threshold=1e-10)
         assert r is not None
@@ -312,7 +314,7 @@ class TestRecovery:
     def test_depth0_does_not_hijack_nonatom(self):
         """y = exp(x) must not be mis-recovered at depth 0; the ladder must go deeper."""
         x = np.linspace(0.5, 2.5, 30)
-        y = np.exp(x)
+        y = eval_formula_univariate("exp(x)", x)
         r = discover(x, y, max_depth=2, n_tries=4, verbose=False,
                      success_threshold=1e-10)
         assert r is not None
@@ -323,7 +325,7 @@ class TestRecovery:
     def test_recover_exp_depth1_ladder(self):
         """≤4 seeds at depth 1 must recover exp(x)."""
         x = np.linspace(0.5, 2.5, 25)
-        y = np.exp(x)
+        y = eval_formula_univariate("exp(x)", x)
         r = discover(x, y, max_depth=1, n_tries=4, verbose=False)
         assert r is not None
         assert r["snap_rmse"] < 1e-8
@@ -333,7 +335,7 @@ class TestRecovery:
     def test_recover_constant_e(self):
         """Constant e at depth 1 — 100% success within a few seeds."""
         x = np.linspace(0.5, 2.5, 25)
-        y = np.full_like(x, np.e)
+        y = eval_formula_univariate("e", x)
         r = discover(x, y, max_depth=1, n_tries=4, verbose=False)
         assert r is not None
         assert r["snap_rmse"] < 1e-8
@@ -346,7 +348,7 @@ class TestRecovery:
         Requires 8 seeds for ≥75% aggregate success — we just need ≥1 hit.
         """
         x = np.linspace(0.5, 5.0, 30)
-        y = np.log(x)
+        y = eval_formula_univariate("ln(x)", x)
         r = discover(x, y, max_depth=3, n_tries=8, verbose=False)
         assert r is not None
         # ln is hard from random init; accept either exact or near-exact fit.
@@ -356,7 +358,7 @@ class TestRecovery:
     def test_recover_exp_minus_ln(self):
         """exp(x) - ln(x) = eml(x, x) at depth 1 — exercises the gate routing."""
         x = np.linspace(0.5, 3.0, 25)
-        y = np.exp(x) - np.log(x)
+        y = eval_formula_univariate("exp(x) - ln(x)", x)
         r = discover(x, y, max_depth=2, n_tries=8, verbose=False)
         assert r is not None
         # Accept any formula within tight RMSE — exact form may differ.

@@ -46,32 +46,10 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from eml_compiler import compile_expr, eval_eml, tree_depth
+from eml_compiler import compile_expr, tree_depth
 from eml_sr import discover
 
-
-# ─── Helpers ───────────────────────────────────────────────────────
-
-
-def _eval_univariate(expr: str, x: np.ndarray) -> np.ndarray:
-    """Compile ``expr`` and evaluate it at each ``x[i]`` — returns real array."""
-    tree = compile_expr(expr)
-    ys = np.empty_like(x, dtype=float)
-    for i, xi in enumerate(x):
-        v = eval_eml(tree, x=float(xi))
-        ys[i] = v.real
-    return ys
-
-
-def _eval_multivariate(expr: str, X: np.ndarray, var_names: tuple) -> np.ndarray:
-    """Compile ``expr`` and evaluate at each row of ``X`` — returns real array."""
-    tree = compile_expr(expr, variables=var_names)
-    ys = np.empty(X.shape[0], dtype=float)
-    for i in range(X.shape[0]):
-        bindings = {name: float(X[i, j]) for j, name in enumerate(var_names)}
-        v = eval_eml(tree, bindings)
-        ys[i] = v.real
-    return ys
+from tests._helpers import eval_formula_multivariate, eval_formula_univariate
 
 
 # ─── Univariate recovery ───────────────────────────────────────────
@@ -108,7 +86,7 @@ def test_recovery_univariate(formula, max_depth, n_tries):
     ref_depth = tree_depth(ref_tree)
 
     x = np.linspace(0.5, 3.0, 40)
-    y = _eval_univariate(formula, x)
+    y = eval_formula_univariate(formula, x)
 
     result = discover(x, y, max_depth=max_depth, n_tries=n_tries, verbose=False)
     assert result is not None, f"discover() returned None on {formula!r}"
@@ -154,7 +132,7 @@ def test_recovery_multivariate(formula, n_vars, var_names, max_depth, n_tries):
 
     rng = np.random.default_rng(0)
     X = rng.uniform(0.5, 3.0, size=(40, n_vars))
-    y = _eval_multivariate(formula, X, var_names)
+    y = eval_formula_multivariate(formula, X, var_names)
 
     result = discover(X, y, max_depth=max_depth, n_tries=n_tries, verbose=False)
     assert result is not None, f"discover() returned None on {formula!r}"
@@ -182,7 +160,7 @@ def test_compiler_target_is_numerically_consistent():
     this breaks, every recovery test above becomes meaningless.
     """
     x = np.linspace(0.5, 3.0, 20)
-    y_compiler = _eval_univariate("x", x)
+    y_compiler = eval_formula_univariate("x", x)
     np.testing.assert_allclose(y_compiler, x, atol=1e-12)
 
 
