@@ -225,6 +225,7 @@ enormous. Use `exp`/`ln` with complex arguments.
 | `benchmarks/pysr_compare.py` | Head-to-head vs PySR (opt-in via `PYSR_ENABLED=1`) |
 | `legacy/eml_executor.mojo` | Original parabolic-attention stack machine (archived) |
 | `legacy/test_eml.mojo` | 109-test bootstrap chain verification (archived) |
+| `ternary/` | §5 ternary-operator experiment (`T(x,y,z)`). See [`ternary/report.md`](ternary/report.md) for the VerifyBaseSet verdict. |
 
 ## References
 
