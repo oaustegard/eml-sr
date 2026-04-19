@@ -258,8 +258,15 @@ _PYSR_UNARY = ["exp", "log", "sqrt"]
 
 
 def _run_pysr(prob: FeynmanProblem, *, config: str,
-              threshold: float) -> EngineResult:
-    """Run PySR with one of two configs: 'default' or 'permissive'."""
+              threshold: float, deterministic: bool = False) -> EngineResult:
+    """Run PySR with one of two configs: 'default' or 'permissive'.
+
+    ``deterministic=True`` forces ``parallelism='serial'`` and a fixed
+    ``random_state``; PySR's bare ``random_state`` without this pairing
+    is a no-op and emits a warning per fit. Serial mode loses PySR's
+    multi-population parallel speedup — roughly ~10× slower — so default
+    is off. See issue #50.
+    """
     from pysr import PySRRegressor
 
     if config == "default":
@@ -273,6 +280,7 @@ def _run_pysr(prob: FeynmanProblem, *, config: str,
     # PySR expects 2D X even for univariate.
     X_2d = X.reshape(-1, 1) if X.ndim == 1 else X
 
+    parallelism = "serial" if deterministic else "multiprocessing"
     model = PySRRegressor(
         binary_operators=_PYSR_BINARY,
         unary_operators=_PYSR_UNARY,
@@ -280,8 +288,9 @@ def _run_pysr(prob: FeynmanProblem, *, config: str,
         progress=False,
         verbosity=0,
         temp_equation_file=True,
-        deterministic=False,
-        random_state=0,
+        deterministic=deterministic,
+        parallelism=parallelism,
+        random_state=0 if deterministic else None,
         **kwargs,
     )
 
@@ -343,7 +352,7 @@ def _fmt_int(x: Optional[int], width: int = 3) -> str:
 
 def run_benchmark(problems: list[FeynmanProblem], *,
                   max_depth: int, n_tries: int, threshold: float,
-                  pysr_enabled: bool) -> dict:
+                  pysr_enabled: bool, deterministic: bool = False) -> dict:
     """Run all engines on all problems. Returns a nested result dict."""
     rows = []
     for prob in problems:
@@ -369,7 +378,8 @@ def run_benchmark(problems: list[FeynmanProblem], *,
         pysr_results: list[EngineResult] = []
         if pysr_enabled:
             for cfg in ("default", "permissive"):
-                r = _run_pysr(prob, config=cfg, threshold=threshold)
+                r = _run_pysr(prob, config=cfg, threshold=threshold,
+                              deterministic=deterministic)
                 pysr_results.append(r)
                 print(f"    pysr/{cfg:10s}   : {r.wall_time:5.1f}s  "
                       f"rmse={r.rmse:.2e}  size={r.size}  "
@@ -512,6 +522,10 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--output", type=str,
                    default="benchmarks/pysr_compare.md",
                    help="Markdown output path (set to '-' for stdout).")
+    p.add_argument("--deterministic", action="store_true",
+                   help="Reproducible PySR runs (parallelism='serial', "
+                        "random_state=0). ~10x slower; use when chasing a "
+                        "specific regression. Default is fast, non-deterministic.")
     return p
 
 
@@ -531,12 +545,16 @@ def main(argv: Optional[list[str]] = None) -> int:
           f"(max_depth={args.max_depth}, n_tries={args.tries}, "
           f"threshold={args.threshold:.0e})", flush=True)
 
+    if args.deterministic and pysr_on:
+        print("▸ PySR: deterministic mode (serial, ~10x slower).", flush=True)
+
     results = run_benchmark(
         problems,
         max_depth=args.max_depth,
         n_tries=args.tries,
         threshold=args.threshold,
         pysr_enabled=pysr_on,
+        deterministic=args.deterministic,
     )
 
     md = to_markdown(results)
