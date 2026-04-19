@@ -56,6 +56,8 @@ from typing import Iterable, Optional, Union
 
 import numpy as np
 
+from eml_operators import EML, EDL, NEG_EML, OperatorConfig
+
 # ─── Errors ────────────────────────────────────────────────────────
 
 class GrammarError(ValueError):
@@ -339,26 +341,227 @@ def _eml_pow(a: EMLTree, b: EMLTree, *, strict: bool = False) -> Node:
     return _eml_exp(_eml_mul(b, _eml_ln(a), strict=strict))
 
 
+# ─── EDL primitives ───────────────────────────────────────────────
+#
+# EDL: edl(x, y) = exp(x) / ln(y), terminal e.
+# Derived identities (verified numerically in tests/test_cousin_identities.py):
+#   exp(x) = edl(x, e)                               size 3
+#   ln(x)  = edl(e, edl(edl(e, x), e))               size 7
+#   1      = edl(e, edl(edl(e, e), e))               size 7
+# Arithmetic (sub, neg, add) uses the same exp/ln composition as EML since
+# the underlying identities a - b = exp(ln(a)) - exp(ln(b)) etc. are
+# operator-agnostic once ln and exp are available. The "−" in EDL is
+# realised by routing through a neg_eml-style pair: for EDL specifically,
+# a/b has a direct form (shown below) that's often shorter than the EML path.
+
+def _e_leaf() -> Node:
+    # e is a terminal in EDL grammar; represented as a leaf labelled "e"
+    return Leaf(value=complex(math.e), label="e")
+
+
+def _edl_exp(x: EMLTree) -> Node:
+    # exp(x) = edl(x, e)
+    return _E(x, _e_leaf(), "eˣ")
+
+
+def _edl_ln(x: EMLTree) -> Node:
+    # ln(x) = edl(e, edl(edl(e, x), e))
+    inner = _E(_e_leaf(), x, "ln.inner")
+    mid = _E(inner, _e_leaf(), "ln.mid")
+    return _E(_e_leaf(), mid, "ln")
+
+
+def _edl_div_direct(a: EMLTree, b: EMLTree) -> Node:
+    # a / b = edl(ln(a), exp(b))
+    #       = exp(ln(a)) / ln(exp(b)) = a / b   ✓
+    return _E(_edl_ln(a), _edl_exp(b), "÷")
+
+
+def _edl_sub(a: EMLTree, b: EMLTree) -> Node:
+    # a - b = a - b computed as exp(ln(a)) - exp(ln(b));
+    # in EDL we don't have a native subtraction. The paper's completeness
+    # claim says all elementary functions are expressible, but subtraction
+    # routes through several levels of exp/ln. This expansion mirrors the
+    # EML ``sub`` pattern by swapping eml's "subtract" edge with the
+    # operator-agnostic algebraic identity
+    #   a - b = ln(exp(a)/exp(b)) = ln(edl(a, exp(b))) — one edl node plus
+    # an outer ln. Not optimal but functional.
+    return _edl_ln(_edl_div_direct(_edl_exp(a), _edl_exp(b)))
+
+
+def _edl_neg(x: EMLTree, *, strict: bool = False) -> Node:
+    # -x = 0 - x, uses the "0" literal or ln(1) under strict mode.
+    zero = _edl_ln(_edl_one_tree()) if strict else _L(0, "0")
+    return _edl_sub(zero, x)
+
+
+def _edl_one_tree() -> Node:
+    # 1 = edl(e, edl(edl(e, e), e)) — verified size 7.
+    inner = _E(_e_leaf(), _e_leaf(), "e^e")
+    mid = _E(inner, _e_leaf(), "exp(e^e)")
+    return _E(_e_leaf(), mid, "1")
+
+
+def _edl_add(a: EMLTree, b: EMLTree, *, strict: bool = False) -> Node:
+    # a + b = a - (-b)
+    return _edl_sub(a, _edl_neg(b, strict=strict))
+
+
+def _edl_inv(x: EMLTree, *, strict: bool = False) -> Node:
+    # 1/x = exp(-ln(x))
+    return _edl_exp(_edl_neg(_edl_ln(x), strict=strict))
+
+
+def _edl_mul(a: EMLTree, b: EMLTree, *, strict: bool = False) -> Node:
+    # a * b = a / (1/b) via direct div
+    return _edl_div_direct(a, _edl_neg(_edl_ln(b), strict=strict))
+
+
+def _edl_div(a: EMLTree, b: EMLTree, *, strict: bool = False) -> Node:
+    # The 'strict' kwarg is accepted for signature compatibility with
+    # _eml_div; the direct EDL division below doesn't actually use it.
+    del strict
+    return _edl_div_direct(a, b)
+
+
+def _edl_pow(a: EMLTree, b: EMLTree, *, strict: bool = False) -> Node:
+    # a^b = exp(b * ln(a))
+    return _edl_exp(_edl_mul(b, _edl_ln(a), strict=strict))
+
+
+# ─── NEG_EML (−EML) primitives ─────────────────────────────────────
+#
+# NEG_EML: ne(x, y) = ln(x) - exp(y), terminal -inf.
+# Derived identities (verified numerically in tests/test_cousin_identities.py):
+#   ln(x)  = ne(x, -inf)                             size 3
+#   exp(x) = ne(x, ne(ne(x, x), -inf))               size 7 (complex intermediate)
+#   0      = ne(x, ne(ne(x, -inf), -inf))            size 7 (needs variable)
+# The exp(x) derivation flows through ln(ln(x) - exp(x)), which is
+# complex-valued for any real x > 0 since ln(x) - exp(x) < 0 throughout
+# the positive reals. This mirrors §4.1's warning about complex
+# intermediates. Callers must use complex128 throughout.
+
+def _ninf_leaf() -> Node:
+    # -inf terminal, stored as the approximation for evaluation.
+    from eml_operators import _NEG_INF_APPROX
+    return Leaf(value=complex(_NEG_INF_APPROX, 0.0), label="-inf")
+
+
+def _ne_ln(x: EMLTree) -> Node:
+    # ln(x) = ne(x, -inf)
+    return _E(x, _ninf_leaf(), "ln")
+
+
+def _ne_exp(x: EMLTree) -> Node:
+    # exp(x) = ne(x, ne(ne(x, x), -inf)) — note the complex intermediate.
+    inner_ne_xx = _E(x, x, "ln(x)-exp(x)")
+    inner_ln = _E(inner_ne_xx, _ninf_leaf(), "ln(ln(x)-exp(x))")
+    return _E(x, inner_ln, "eˣ")
+
+
+def _ne_sub(a: EMLTree, b: EMLTree) -> Node:
+    # a - b = ne(exp(a), ln(b))
+    #       = ln(exp(a)) - exp(ln(b)) = a - b   ✓
+    return _E(_ne_exp(a), _ne_ln(b), "−")
+
+
+def _ne_neg(x: EMLTree, *, strict: bool = False) -> Node:
+    zero = _ne_zero_tree() if strict else _L(0, "0")
+    return _ne_sub(zero, x)
+
+
+def _ne_zero_tree() -> Node:
+    # 0 = ne(x, ne(ne(x, -inf), -inf)) using some variable x.
+    # The "strict" flavor here is only reachable when a variable binding
+    # is available; for compiler strict mode we fall back on the literal.
+    raise GrammarError(
+        "strict mode: NEG_EML's derivation of 0 requires a variable; "
+        "use strict=False to fall back on the numeric literal 0"
+    )
+
+
+def _ne_add(a: EMLTree, b: EMLTree, *, strict: bool = False) -> Node:
+    # a + b = a - (-b)
+    return _ne_sub(a, _ne_neg(b, strict=strict))
+
+
+def _ne_inv(x: EMLTree, *, strict: bool = False) -> Node:
+    # 1/x = exp(-ln(x))
+    return _ne_exp(_ne_neg(_ne_ln(x), strict=strict))
+
+
+def _ne_mul(a: EMLTree, b: EMLTree, *, strict: bool = False) -> Node:
+    # a * b = exp(ln(a) + ln(b))
+    return _ne_exp(_ne_add(_ne_ln(a), _ne_ln(b), strict=strict))
+
+
+def _ne_div(a: EMLTree, b: EMLTree, *, strict: bool = False) -> Node:
+    return _ne_mul(a, _ne_inv(b, strict=strict), strict=strict)
+
+
+def _ne_pow(a: EMLTree, b: EMLTree, *, strict: bool = False) -> Node:
+    return _ne_exp(_ne_mul(b, _ne_ln(a), strict=strict))
+
+
+# ─── Primitive dispatcher ──────────────────────────────────────────
+
+def _primitives_for(op_config: OperatorConfig) -> dict:
+    """Return the primitive builder table for a given operator.
+
+    Keys: 'exp', 'ln', 'sub', 'neg', 'add', 'inv', 'mul', 'div', 'pow'.
+    Each value is either a 1-arg or 2-arg tree builder (with optional
+    strict kwarg) matching the EML primitive signatures above.
+    """
+    if op_config.name == "eml":
+        return {
+            "exp": _eml_exp, "ln": _eml_ln, "sub": _eml_sub,
+            "neg": _eml_neg, "add": _eml_add, "inv": _eml_inv,
+            "mul": _eml_mul, "div": _eml_div, "pow": _eml_pow,
+            "terminal_builder": _one,
+        }
+    if op_config.name == "edl":
+        return {
+            "exp": _edl_exp, "ln": _edl_ln, "sub": _edl_sub,
+            "neg": _edl_neg, "add": _edl_add, "inv": _edl_inv,
+            "mul": _edl_mul, "div": _edl_div, "pow": _edl_pow,
+            "terminal_builder": _e_leaf,
+        }
+    if op_config.name == "neg_eml":
+        return {
+            "exp": _ne_exp, "ln": _ne_ln, "sub": _ne_sub,
+            "neg": _ne_neg, "add": _ne_add, "inv": _ne_inv,
+            "mul": _ne_mul, "div": _ne_div, "pow": _ne_pow,
+            "terminal_builder": _ninf_leaf,
+        }
+    raise ValueError(f"no primitives registered for operator {op_config.name!r}")
+
+
 # ─── Compile: AST → EMLTree ────────────────────────────────────────
 
 def compile(ast: dict, *, strict: bool = False,
-            variables: Optional[Iterable[str]] = None) -> EMLTree:
-    """Compile a parsed AST into an EML tree.
+            variables: Optional[Iterable[str]] = None,
+            op_config: OperatorConfig = EML) -> EMLTree:
+    """Compile a parsed AST into an operator tree.
 
     Parameters
     ----------
     ast : dict
         Output of :func:`parse`.
     strict : bool, default ``False``
-        If ``True``, refuse inputs that aren't derivable from ``{1, x}``
-        alone — i.e. reject numeric literals other than ``0`` / ``1`` and
-        named constants other than ``e``. Also routes negation through
-        ``eml_ln(1)`` instead of a literal ``0`` leaf, so the compiled
-        tree's leaves are all either ``1`` or a variable name.
+        If ``True``, refuse inputs that aren't derivable from the
+        operator's base grammar — i.e. reject numeric literals other
+        than ``0`` / terminal and named constants not native to the
+        operator. Also routes negation through the bootstrapped zero
+        (``ln(1)`` for EML, ``ln(edl(...))`` for EDL) instead of a
+        literal ``0`` leaf.
     variables : iterable of str, optional
         Names to treat as symbolic variables. If given, any other bare
-        identifier (other than ``e``, ``pi``, ``π``) raises. If ``None``,
-        any bare identifier is accepted as a variable.
+        identifier (other than recognized named constants) raises. If
+        ``None``, any bare identifier is accepted as a variable.
+    op_config : OperatorConfig, default EML
+        Selects the target operator. For EML, all primitives follow the
+        paper's canonical identities. For EDL / NEG_EML, primitives
+        follow the derivations documented in :mod:`eml_operators`.
 
     Returns
     -------
@@ -369,12 +572,30 @@ def compile(ast: dict, *, strict: bool = False,
     ------
     GrammarError
         In ``strict=True`` mode, when the input contains numeric literals
-        other than ``0`` / ``1`` or named constants other than ``e``.
-        Subclasses :class:`ValueError` for backward compatibility.
+        or named constants that aren't derivable in the operator's
+        grammar.
     ValueError
         On unsupported operators (trig) or other parser errors.
     """
     allowed_vars = set(variables) if variables is not None else None
+    P = _primitives_for(op_config)
+
+    def terminal_tree() -> EMLTree:
+        """Reach the operator's primary terminal (1, e, -inf)."""
+        return P["terminal_builder"]()
+
+    def one_tree() -> EMLTree:
+        """Reach the constant ``1`` in the operator's grammar.
+
+        For EML, ``1`` is the terminal. For EDL, it's a derived 7-node
+        subtree. For NEG_EML (strict), ``1`` isn't reachable without a
+        variable, so we fall back to a literal leaf.
+        """
+        if op_config.name == "eml":
+            return _one()
+        if op_config.name == "edl":
+            return _edl_one_tree()
+        return _L(1, "1")
 
     def recur(node: dict) -> EMLTree:
         kind = node["k"]
@@ -384,15 +605,25 @@ def compile(ast: dict, *, strict: bool = False,
             if strict and v not in (0, 1):
                 raise GrammarError(
                     f"strict mode: numeric literal {v!r} is not derivable from "
-                    "{{1, x}}; rewrite it algebraically (e.g. 2 -> 1+1) or use strict=False"
+                    f"the {op_config.name} grammar; rewrite algebraically or "
+                    "use strict=False"
                 )
+            if strict and v == 1 and op_config.name == "eml":
+                return _one()
+            if strict and v == 1 and op_config.name == "edl":
+                return _edl_one_tree()
             return _L(v)
 
         if kind == "cst":
             name = node["name"]
             if name in ("e", "E"):
-                # paper-faithful: e = eml(1, 1)
-                return _E(_one(), _one(), "e")
+                if op_config.name == "edl":
+                    return _e_leaf()
+                # For EML: e = eml(1, 1); for NEG_EML: not natively derivable,
+                # fall back to a literal leaf.
+                if op_config.name == "eml":
+                    return _E(_one(), _one(), "e")
+                return _L(math.e, "e")
             if name in ("pi", "π", "PI", "Pi"):
                 if strict:
                     raise GrammarError(
@@ -411,27 +642,31 @@ def compile(ast: dict, *, strict: bool = False,
             a = recur(node["a"])
             op = node["op"]
             if op == "neg":
-                return _eml_neg(a, strict=strict)
+                return P["neg"](a, strict=strict)
             if op == "exp":
-                return _eml_exp(a)
+                return P["exp"](a)
             if op in ("ln", "log"):
-                return _eml_ln(a)
+                return P["ln"](a)
             if op == "sqrt":
                 # sqrt(x) = x^(1/2). Needs 0.5; in strict mode rewrite
                 # as x^(1/(1+1)).
                 if strict:
-                    half = _eml_div(_one(), _eml_add(_one(), _one(), strict=True), strict=True)
+                    one = one_tree()
+                    two = P["add"](one_tree(), one_tree(), strict=True)
+                    half = P["div"](one, two, strict=True)
                 else:
                     half = _L(0.5, "½")
-                return _eml_pow(a, half, strict=strict)
+                return P["pow"](a, half, strict=strict)
             if op in ("sin", "cos", "tan"):
                 raise ValueError(
-                    f"{op}: trig EML trees are enormous — out of scope per §4.1. "
+                    f"{op}: trig trees are enormous — out of scope per §4.1. "
                     "Use exp/ln with complex arguments if you need a transcendental path."
                 )
             raise ValueError(f"unsupported unary operator: {op}")
 
         if kind == "eml":
+            # ``eml(a, b)`` in source becomes a raw operator node for
+            # whichever operator is active — parser doesn't distinguish.
             return _E(recur(node["l"]), recur(node["r"]))
 
         if kind == "bin":
@@ -439,15 +674,15 @@ def compile(ast: dict, *, strict: bool = False,
             r = recur(node["r"])
             op = node["op"]
             if op == "+":
-                return _eml_add(l, r, strict=strict)
+                return P["add"](l, r, strict=strict)
             if op == "-":
-                return _eml_sub(l, r)
+                return P["sub"](l, r)
             if op == "*":
-                return _eml_mul(l, r, strict=strict)
+                return P["mul"](l, r, strict=strict)
             if op == "/":
-                return _eml_div(l, r, strict=strict)
+                return P["div"](l, r, strict=strict)
             if op == "^":
-                return _eml_pow(l, r, strict=strict)
+                return P["pow"](l, r, strict=strict)
             raise ValueError(f"unsupported binary operator: {op}")
 
         raise ValueError(f"unknown AST node kind: {kind}")
@@ -456,25 +691,28 @@ def compile(ast: dict, *, strict: bool = False,
 
 
 def compile_expr(expr: str, *, strict: bool = False,
-                 variables: Optional[Iterable[str]] = None) -> EMLTree:
+                 variables: Optional[Iterable[str]] = None,
+                 op_config: OperatorConfig = EML) -> EMLTree:
     """One-shot: parse a string then compile."""
-    return compile(parse(expr), strict=strict, variables=variables)
+    return compile(parse(expr), strict=strict, variables=variables,
+                   op_config=op_config)
 
 
 # ─── Evaluation + tree utilities ───────────────────────────────────
 
-def eval_eml(tree: EMLTree, bindings: Optional[dict] = None, **kwargs) -> complex:
-    """Evaluate an EML tree numerically over ``C``.
+def eval_eml(tree: EMLTree, bindings: Optional[dict] = None,
+             op_config: OperatorConfig = EML, **kwargs) -> complex:
+    """Evaluate an operator tree numerically over ``C``.
 
     Symbolic leaves (bare variables) are resolved via ``bindings``
     and/or ``**kwargs``; kwargs take precedence. Raises ``ValueError``
     if a variable has no binding.
 
-    Uses :func:`numpy.exp` and :func:`numpy.log` (principal branch) on
-    ``complex128`` for the ``eml`` operator: ``eml(x, y) = exp(x) - log(y)``.
-    This honors the IEEE-754 edge cases the bootstrap chain depends on
-    — ``log(0) = -inf + 0j`` and ``exp(-inf) = 0`` — per §6 of ``CLAUDE.md``.
-    :mod:`cmath` cannot be used here because it raises on ``log(0)``.
+    Uses NumPy (``complex128``, principal branch of ln) via the
+    operator's ``op_numpy`` field. This honors the IEEE-754 edge cases
+    the EML bootstrap chain depends on — ``log(0) = -inf + 0j`` and
+    ``exp(-inf) = 0`` — per §6 of ``CLAUDE.md``. :mod:`cmath` can't be
+    used here because it raises on ``log(0)``.
     """
     env = dict(bindings) if bindings else {}
     env.update(kwargs)
@@ -488,7 +726,7 @@ def eval_eml(tree: EMLTree, bindings: Optional[dict] = None, **kwargs) -> comple
             raise ValueError(f"no binding for variable {n.label!r}")
         left = recur(n.left)
         right = recur(n.right)
-        return np.exp(left) - np.log(right)
+        return op_config.op_numpy(left, right)
 
     # suppress "divide by zero encountered in log" — that's the
     # intended IEEE semantics here, not a bug.
@@ -512,16 +750,19 @@ def tree_depth(tree: EMLTree) -> int:
     return 1 + max(tree_depth(tree.left), tree_depth(tree.right))
 
 
-def to_string(tree: EMLTree) -> str:
-    """Pretty-print an EML tree using the same ``eml(a, b)`` / leaf
-    syntax produced by :meth:`eml_sr.EMLTree1D.to_expr`.
+def to_string(tree: EMLTree, op_config: OperatorConfig = EML) -> str:
+    """Pretty-print an operator tree using ``<op>(a, b)`` / leaf syntax.
 
     Numeric leaves are emitted as parseable decimal (``"1"``, ``"0.5"``,
     ``"3.141592653589793"``) so that :func:`to_string` round-trips
     through :func:`parse` / :func:`compile`. Symbolic leaves (variables)
     are emitted as their ``label``. For display purposes (``½``, ``π``),
     use :func:`to_string_pretty`.
+
+    ``op_config`` controls the operator name in the prefix
+    (``eml``/``edl``/``neg_eml``). Defaults to EML.
     """
+    op_name = op_config.name
     if isinstance(tree, Leaf):
         if tree.is_symbolic:
             return tree.label
@@ -533,18 +774,21 @@ def to_string(tree: EMLTree) -> str:
                 return str(int(r))
             return repr(r)
         return f"({v.real}+{v.imag}j)"  # rare; not in standard inputs
-    return f"eml({to_string(tree.left)}, {to_string(tree.right)})"
+    return (f"{op_name}({to_string(tree.left, op_config)}, "
+            f"{to_string(tree.right, op_config)})")
 
 
-def to_string_pretty(tree: EMLTree) -> str:
+def to_string_pretty(tree: EMLTree, op_config: OperatorConfig = EML) -> str:
     """Like :func:`to_string` but uses decorative labels (``½``, ``π``).
 
     Matches the JS ``emlStr`` function. Not parseable by :func:`parse`;
     use :func:`to_string` for round-trip.
     """
+    op_name = op_config.name
     if isinstance(tree, Leaf):
         return tree.label
-    return f"eml({to_string_pretty(tree.left)}, {to_string_pretty(tree.right)})"
+    return (f"{op_name}({to_string_pretty(tree.left, op_config)}, "
+            f"{to_string_pretty(tree.right, op_config)})")
 
 
 def free_variables(tree: EMLTree) -> set[str]:

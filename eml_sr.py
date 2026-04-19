@@ -19,17 +19,25 @@ import torch
 import torch.nn as nn
 from typing import Optional
 
+from eml_operators import EML, OperatorConfig
+
 DTYPE = torch.complex128
 REAL = torch.float64
 _CLAMP = 1e300
 _BYPASS = 1.0 - torch.finfo(torch.float64).eps
 _CHILD_EPS = torch.finfo(torch.float64).eps
+_TERM_EPS = torch.finfo(torch.float64).eps
 
 
 # ─── EML operator ──────────────────────────────────────────────
 
 def eml_op(x, y):
-    """EML(x, y) = exp(x) - log(y), complex plane."""
+    """EML(x, y) = exp(x) - log(y), complex plane.
+
+    Kept as a module-level function for backward compatibility with
+    callers that import it directly. For operator-parameterised trees,
+    the tree's ``op_config.op`` is called in place of this function.
+    """
     return torch.exp(x) - torch.log(y)
 
 
@@ -45,20 +53,22 @@ class EMLTree1D(nn.Module):
             (n_vars+2 logits per side, 2 sides per node)
     """
 
-    def __init__(self, depth: int, n_vars: int = 1, init_scale: float = 1.0):
+    def __init__(self, depth: int, n_vars: int = 1, init_scale: float = 1.0,
+                 op_config: OperatorConfig = EML):
         super().__init__()
         self.depth = depth
         self.n_vars = n_vars
         self.n_leaves = 2 ** depth
         self.n_internal = self.n_leaves - 1
+        self.op_config = op_config
 
-        # Leaf logits: (n_leaves, n_vars+1) — [weight_for_1, weight_for_x1, ...]
+        # Leaf logits: (n_leaves, n_vars+1) — [weight_for_terminal, weight_for_x1, ...]
         leaf_init = torch.randn(self.n_leaves, n_vars + 1, dtype=REAL) * init_scale
-        leaf_init[:, 0] += 2.0  # bias toward constant 1
+        leaf_init[:, 0] += 2.0  # bias toward the operator's terminal constant
         self.leaf_logits = nn.Parameter(leaf_init)
 
-        # Gate logits: (n_internal, 2, n_vars+2) — softmax over [1, x1, ..., xn, child]
-        # Bias toward constant 1 (safe default that triggers leaf usage below).
+        # Gate logits: (n_internal, 2, n_vars+2) — softmax over [terminal, x1, ..., xn, child]
+        # Bias toward the terminal (safe default that triggers leaf usage below).
         gate_init = torch.randn(self.n_internal, 2, n_vars + 2, dtype=REAL) * init_scale
         gate_init[..., 0] += 4.0
         self.gate_logits = nn.Parameter(gate_init)
@@ -69,12 +79,26 @@ class EMLTree1D(nn.Module):
             x = x.unsqueeze(1)  # (batch,) → (batch, 1)
         x = x.to(DTYPE)
         batch = x.shape[0]
-        ones = torch.ones(batch, 1, dtype=DTYPE)
+        term_val = self.op_config.terminal_numeric
+        term_col = torch.full((batch, 1), term_val, dtype=DTYPE)
 
-        # Leaf values: soft mixture of {1, x₁, ..., xₙ}
+        # Leaf values: soft mixture of {terminal, x₁, ..., xₙ}. When the
+        # terminal is a large finite stand-in for -inf, zero-weighted
+        # routes must be clamped to avoid 0 * (-1e30) = -0 NaN cascades
+        # after the first op.
         w = torch.softmax(self.leaf_logits / tau, dim=1).to(DTYPE)  # (n_leaves, n_vars+1)
-        candidates = torch.cat([ones, x], dim=1)  # (batch, n_vars+1)
-        level = candidates @ w.T  # (batch, n_leaves)
+        candidates = torch.cat([term_col, x], dim=1)  # (batch, n_vars+1)
+        if self.op_config.is_neg_inf_terminal:
+            # Mask near-zero terminal weights so the product collapses
+            # cleanly to 0 instead of generating junk.
+            term_w = w[:, 0]
+            mask_t = term_w.abs() > _TERM_EPS
+            w_safe = w.clone()
+            w_safe[:, 0] = torch.where(mask_t, term_w,
+                                        torch.zeros_like(term_w))
+            level = candidates @ w_safe.T
+        else:
+            level = candidates @ w.T  # (batch, n_leaves)
 
         # Gate probabilities: (n_vars+2)-way softmax per side
         gate_probs = torch.softmax(self.gate_logits / tau, dim=-1)  # (n_internal, 2, n_vars+2)
@@ -110,10 +134,20 @@ class EMLTree1D(nn.Module):
                 p_child_safe = torch.where(mask_c, p_child,
                                            torch.zeros_like(p_child))
 
-                # Start with constant term
+                # Start with constant term (the operator's terminal).
                 p_const = ps[:, 0].unsqueeze(0)  # (1, n_pairs)
-                blend_r = p_const + p_child_safe * safe_child_r
-                blend_i = p_child_safe * safe_child_i
+                if self.op_config.is_neg_inf_terminal:
+                    # Mask zero-weight -inf contributions to avoid
+                    # 0 * (-1e30) poisoning intermediate values.
+                    mask_t = p_const.abs() > _TERM_EPS
+                    p_term = torch.where(mask_t, p_const,
+                                          torch.zeros_like(p_const))
+                else:
+                    p_term = p_const
+                term_r = float(self.op_config.terminal_numeric.real)
+                term_i = float(self.op_config.terminal_numeric.imag)
+                blend_r = p_term * term_r + p_child_safe * safe_child_r
+                blend_i = p_term * term_i + p_child_safe * safe_child_i
 
                 # Add variable contributions
                 for v in range(self.n_vars):
@@ -123,8 +157,12 @@ class EMLTree1D(nn.Module):
 
                 # Clean bypass when a single choice has all the mass.
                 b_to_1 = p_const > _BYPASS
-                blend_r = torch.where(b_to_1, torch.ones_like(blend_r), blend_r)
-                blend_i = torch.where(b_to_1, torch.zeros_like(blend_i), blend_i)
+                blend_r = torch.where(b_to_1,
+                                       torch.full_like(blend_r, term_r),
+                                       blend_r)
+                blend_i = torch.where(b_to_1,
+                                       torch.full_like(blend_i, term_i),
+                                       blend_i)
                 for v in range(self.n_vars):
                     b_to_xv = ps[:, v + 1].unsqueeze(0) > _BYPASS
                     xv_r = x_r_all[:, v:v+1].expand_as(blend_r)
@@ -137,7 +175,7 @@ class EMLTree1D(nn.Module):
                 else:
                     right_in = torch.complex(blend_r, blend_i)
 
-            level = eml_op(left_in, right_in)
+            level = self.op_config.op(left_in, right_in)
 
             # Clamp and scrub NaN
             level = torch.complex(
@@ -174,10 +212,11 @@ class EMLTree1D(nn.Module):
         return tree
 
     def _var_labels(self) -> list:
-        """Variable names for expression printing."""
+        """Variable names for expression printing. Index 0 is the terminal."""
+        term = self.op_config.terminal_label
         if self.n_vars == 1:
-            return ["1", "x"]
-        return ["1"] + [f"x{i+1}" for i in range(self.n_vars)]
+            return [term, "x"]
+        return [term] + [f"x{i+1}" for i in range(self.n_vars)]
 
     def to_expr(self) -> str:
         """Extract symbolic expression from snapped tree."""
@@ -186,19 +225,23 @@ class EMLTree1D(nn.Module):
 
         labels = self._var_labels()
         exprs = [labels[c] for c in leaf_choices]
+        op_name = self.op_config.name
+        term = self.op_config.terminal_label
 
         node_idx = 0
         while len(exprs) > 1:
             new_exprs = []
             for i in range(0, len(exprs), 2):
                 lc, rc = gate_choices[node_idx]
-                left = _resolve_gate(lc, exprs[i], self.n_vars)
-                right = _resolve_gate(rc, exprs[i + 1], self.n_vars)
-                new_exprs.append(f"eml({left}, {right})")
+                left = _resolve_gate(lc, exprs[i], self.n_vars, term)
+                right = _resolve_gate(rc, exprs[i + 1], self.n_vars, term)
+                new_exprs.append(f"{op_name}({left}, {right})")
                 node_idx += 1
             exprs = new_exprs
 
-        return _simplify(exprs[0])
+        if self.op_config.simplifier_enabled:
+            return _simplify(exprs[0])
+        return exprs[0]
 
     def n_uncertain(self, threshold: float = 0.01) -> int:
         """Count weights that don't cleanly snap."""
@@ -212,13 +255,14 @@ class EMLTree1D(nn.Module):
         return n
 
 
-def _resolve_gate(choice: int, child_expr: str, n_vars: int = 1) -> str:
+def _resolve_gate(choice: int, child_expr: str, n_vars: int = 1,
+                  term_label: str = "1") -> str:
     """Map a gate choice index to the input expression.
 
-    Indices: 0 → "1", 1..n_vars → variable names, n_vars+1 → child.
+    Indices: 0 → terminal, 1..n_vars → variable names, n_vars+1 → child.
     """
     if choice == 0:
-        return "1"
+        return term_label
     if choice <= n_vars:
         return "x" if n_vars == 1 else f"x{choice}"
     return child_expr
@@ -434,6 +478,7 @@ def _train_one(
     verbose: bool = False,
     init_tree: Optional[nn.Module] = None,
     n_vars: Optional[int] = None,
+    op_config: OperatorConfig = EML,
 ) -> dict:
     """Train one EML tree from a single random seed.
 
@@ -450,7 +495,9 @@ def _train_one(
     if n_vars is None:
         n_vars = x_data.shape[1] if x_data.dim() == 2 else 1
     torch.manual_seed(seed)
-    tree = init_tree if init_tree is not None else EMLTree1D(depth, n_vars=n_vars)
+    tree = init_tree if init_tree is not None else EMLTree1D(
+        depth, n_vars=n_vars, op_config=op_config
+    )
     opt = torch.optim.Adam(tree.parameters(), lr=lr)
 
     best_loss = float("inf")
@@ -527,6 +574,7 @@ def discover(
     verbose: bool = True,
     success_threshold: float = 1e-10,
     n_workers: int = 1,
+    op_config: OperatorConfig = EML,
 ) -> Optional[dict]:
     """Discover a formula relating X → y.
 
@@ -593,6 +641,7 @@ def discover(
             hard_iters=h_iters,
             verbose=False,
             n_vars=n_vars,
+            op_config=op_config,
         )
         for seed, result in _run_seeds(x_t, y_t, depth, n_tries,
                                        train_kwargs, n_workers):
@@ -675,12 +724,14 @@ class GrowingEMLTree(nn.Module):
     optimizer state stays consistent across grow steps.
     """
 
-    def __init__(self, init_scale: float = 1.0, n_vars: int = 1):
+    def __init__(self, init_scale: float = 1.0, n_vars: int = 1,
+                 op_config: OperatorConfig = EML):
         super().__init__()
         self._params = nn.ParameterDict()
         self.nodes: list = []
         self.init_scale = init_scale
         self.n_vars = n_vars
+        self.op_config = op_config
         self._next_key = 0
         # Build initial: two leaves + one internal root (depth 1)
         l0 = self._new_leaf()
@@ -799,11 +850,21 @@ class GrowingEMLTree(nn.Module):
             return cache[idx]
         n = self.nodes[idx]
         batch = x_c.shape[0]
+        term_val = self.op_config.terminal_numeric
+        term_r = float(term_val.real)
+        term_i = float(term_val.imag)
         if n["type"] == "leaf":
             logits = self._params[n["key"]]                     # (n_vars+1,)
             w = torch.softmax(logits / tau, dim=0).to(DTYPE)    # (n_vars+1,)
             ones = torch.ones(batch, dtype=DTYPE)
-            val = w[0] * ones
+            if self.op_config.is_neg_inf_terminal:
+                # Mask zero-weight -inf contributions.
+                wt = w[0]
+                wt = torch.where(wt.abs() > _TERM_EPS, wt,
+                                  torch.zeros_like(wt))
+                val = wt * term_val * ones
+            else:
+                val = w[0] * term_val * ones
             for v in range(self.n_vars):
                 val = val + w[v + 1] * x_c[:, v]
         else:
@@ -812,6 +873,8 @@ class GrowingEMLTree(nn.Module):
             child_idx = self.n_vars + 1
             left_val = self._eval(n["left"], x_c, tau, cache)
             right_val = self._eval(n["right"], x_c, tau, cache)
+
+            is_neg_inf = self.op_config.is_neg_inf_terminal
 
             def _blend(side: int, child_val):
                 ps = p[side]                                    # (n_vars+2,)
@@ -826,10 +889,18 @@ class GrowingEMLTree(nn.Module):
                 child_i = torch.where(mask_c, child_val.imag, zero_i)
                 p_c_s = torch.where(mask_c, p_child, torch.zeros_like(p_child))
 
-                # α + Σ βᵢ xᵢ + γ child — computed separately for real/imag
+                # Mask tiny terminal weights the same way when the
+                # terminal is a large finite stand-in for -inf.
+                p_term = ps[0]
+                if is_neg_inf:
+                    p_term = torch.where(p_term.abs() > _TERM_EPS,
+                                          p_term,
+                                          torch.zeros_like(p_term))
+
+                # α·term + Σ βᵢ xᵢ + γ child — computed separately for real/imag
                 # so downstream clamping can scrub NaN per-part cleanly.
-                blend_r = ps[0] + p_c_s * child_r
-                blend_i = p_c_s * child_i
+                blend_r = p_term * term_r + p_c_s * child_r
+                blend_i = p_term * term_i + p_c_s * child_i
                 for v in range(self.n_vars):
                     p_v = ps[v + 1]
                     blend_r = blend_r + p_v * x_c[:, v].real
@@ -838,7 +909,7 @@ class GrowingEMLTree(nn.Module):
 
             l_in = _blend(0, left_val)
             r_in = _blend(1, right_val)
-            val = eml_op(l_in, r_in)
+            val = self.op_config.op(l_in, r_in)
             val = torch.complex(
                 torch.nan_to_num(val.real, nan=0.0, posinf=_CLAMP, neginf=-_CLAMP)
                     .clamp(-_CLAMP, _CLAMP),
@@ -1004,22 +1075,27 @@ class GrowingEMLTree(nn.Module):
         return n
 
     def to_expr(self) -> str:
-        return _simplify(self._expr_at(self.root))
+        raw = self._expr_at(self.root)
+        if self.op_config.simplifier_enabled:
+            return _simplify(raw)
+        return raw
 
     def _expr_at(self, idx: int) -> str:
         n = self.nodes[idx]
+        term = self.op_config.terminal_label
         if n["type"] == "leaf":
             c = int(torch.argmax(self._params[n["key"]]).item())
             if c == 0:
-                return "1"
+                return term
             return "x" if self.n_vars == 1 else f"x{c}"
         g = self._params[n["key"]]
         lc = int(torch.argmax(g[0]).item())
         rc = int(torch.argmax(g[1]).item())
         left_expr = self._expr_at(n["left"])
         right_expr = self._expr_at(n["right"])
-        return (f"eml({_resolve_gate(lc, left_expr, self.n_vars)}, "
-                f"{_resolve_gate(rc, right_expr, self.n_vars)})")
+        op_name = self.op_config.name
+        return (f"{op_name}({_resolve_gate(lc, left_expr, self.n_vars, term)}, "
+                f"{_resolve_gate(rc, right_expr, self.n_vars, term)})")
 
 
 def _train_growing(
@@ -1095,6 +1171,7 @@ def discover_curriculum(
     lr: float = 0.01,
     verbose: bool = True,
     success_threshold: float = 1e-10,
+    op_config: OperatorConfig = EML,
 ) -> Optional[dict]:
     """Discover a formula via curriculum learning: grow the tree incrementally.
 
@@ -1143,10 +1220,10 @@ def discover_curriculum(
     with torch.no_grad():
         n_atoms = n_vars + 1
         for leaf_choice in range(n_atoms):
-            label = "1" if leaf_choice == 0 else (
+            label = op_config.terminal_label if leaf_choice == 0 else (
                 "x" if n_vars == 1 else f"x{leaf_choice}"
             )
-            probe = EMLTree1D(depth=0, n_vars=n_vars)
+            probe = EMLTree1D(depth=0, n_vars=n_vars, op_config=op_config)
             new_leaf = torch.full_like(probe.leaf_logits, -50.0)
             new_leaf[0, leaf_choice] = 50.0
             probe.leaf_logits.copy_(new_leaf)
@@ -1170,7 +1247,7 @@ def discover_curriculum(
 
     for seed in range(n_tries):
         torch.manual_seed(seed)
-        tree = GrowingEMLTree(n_vars=n_vars)
+        tree = GrowingEMLTree(n_vars=n_vars, op_config=op_config)
         opt = torch.optim.Adam(tree.parameters(), lr=lr)
 
         if verbose:
