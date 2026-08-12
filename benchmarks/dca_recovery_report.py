@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from pathlib import Path
 
 ARMS = ["adam_softmax", "adam_linear", "dca_linear"]
@@ -26,7 +27,7 @@ TARGET_ORDER = [
 
 
 def _fmt_r2(v) -> str:
-    if v is None or v != v:
+    if v is None or math.isnan(v):
         return "nan"
     return f"{v:.4f}"
 
