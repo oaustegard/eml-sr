@@ -375,17 +375,28 @@ def run_linear_ladder(target: Target, X_train, y_train, X_held, y_held,
                     pre_snap_tree = dca_res["tree"]
                     total_outer += int(dca_res["outer_iters_used"])
 
-                snapped = _post_search_snap(pre_snap_tree, x_t, y_t,
-                                            ramp=(arm == "dca_linear"))
+                # A NaN-parameter tree (deep-init blowup) poisons
+                # iterative_snap and to_expr (round(nan) raises); skip
+                # the seed instead of aborting the arm.
                 with torch.no_grad():
-                    pred_t, _, _ = snapped(x_t)
-                    snap_mse = float(torch.mean(
-                        (pred_t - y_t).abs() ** 2).real.item())
-                if not math.isfinite(snap_mse):
+                    pred_raw, _, _ = pre_snap_tree(x_t)
+                    raw_mse = float(torch.mean(
+                        (pred_raw - y_t).abs() ** 2).real.item())
+                if not math.isfinite(raw_mse):
                     continue
-
-                cand = {"depth": depth, "tree": snapped,
-                       "expr": snapped.to_expr(), "snap_mse": snap_mse}
+                try:
+                    snapped = _post_search_snap(pre_snap_tree, x_t, y_t,
+                                                ramp=(arm == "dca_linear"))
+                    with torch.no_grad():
+                        pred_t, _, _ = snapped(x_t)
+                        snap_mse = float(torch.mean(
+                            (pred_t - y_t).abs() ** 2).real.item())
+                    if not math.isfinite(snap_mse):
+                        continue
+                    cand = {"depth": depth, "tree": snapped,
+                            "expr": snapped.to_expr(), "snap_mse": snap_mse}
+                except (ValueError, OverflowError):
+                    continue
                 if best_at_depth is None or snap_mse < best_at_depth["snap_mse"]:
                     best_at_depth = cand
                 if snap_mse < SUCCESS_THRESHOLD:
