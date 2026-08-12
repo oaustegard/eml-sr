@@ -73,7 +73,7 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from eml_dca import dca_train
+from eml_dca import dca_train  # noqa: E402
 from eml_sr import DTYPE, REAL, discover
 from eml_sr_linear import (
     EMLTree1DLinear,
