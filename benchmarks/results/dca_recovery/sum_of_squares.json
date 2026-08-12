@@ -1,0 +1,71 @@
+{
+  "target": {
+    "name": "sum_of_squares",
+    "n_vars": 4,
+    "expr": "x0**2 + x3**2",
+    "canonical": false
+  },
+  "protocol": {
+    "train_n": 256,
+    "train_domain": [
+      0.5,
+      2.5
+    ],
+    "held_n": 512,
+    "held_domain": [
+      0.25,
+      4.0
+    ],
+    "structural_rel_tol": 1e-06,
+    "success_threshold": 1e-10,
+    "max_depth": 4,
+    "n_tries": 6,
+    "dca_outer_iters": 40,
+    "dca_inner_iters": 50,
+    "workers": 2
+  },
+  "arms": {
+    "adam_softmax": {
+      "target": "sum_of_squares",
+      "arm": "adam_softmax",
+      "structural_recovered": false,
+      "train_snap_mse": 4.294424813790212,
+      "held_r2": -1.6781713273002832,
+      "wall_clock_s": 256.9973044395447,
+      "expr": "exp(x4)",
+      "depth_found": 2,
+      "n_seeds_run": 6,
+      "total_outer_iters": 0,
+      "max_abs_err_held": 37.22495578705294,
+      "error": null
+    },
+    "adam_linear": {
+      "target": "sum_of_squares",
+      "arm": "adam_linear",
+      "structural_recovered": false,
+      "train_snap_mse": 0.21588556646700585,
+      "held_r2": 0.7163511040931776,
+      "wall_clock_s": 2504.1827459335327,
+      "expr": "-4 + 3*x1 + 3*x4",
+      "depth_found": 0,
+      "n_seeds_run": 30,
+      "total_outer_iters": 0,
+      "max_abs_err_held": 11.410425771710788,
+      "error": null
+    },
+    "dca_linear": {
+      "target": "sum_of_squares",
+      "arm": "dca_linear",
+      "structural_recovered": false,
+      "train_snap_mse": 0.13218895461776412,
+      "held_r2": 0.6923171208692225,
+      "wall_clock_s": 7459.607093572617,
+      "expr": "eml(1 + 0.569*x4, 1*(eml(1 + -1*x1 + 1*(eml(1, 1 + 1*(eml(-1 + 1*x1 + -1*x4 + 1*(1*x1), 1*x1 + 1*(1))))), 0.442*x1)))",
+      "depth_found": 4,
+      "n_seeds_run": 30,
+      "total_outer_iters": 954,
+      "max_abs_err_held": 12.161649250015916,
+      "error": null
+    }
+  }
+}

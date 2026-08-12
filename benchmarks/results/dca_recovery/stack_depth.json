@@ -1,0 +1,71 @@
+{
+  "target": {
+    "name": "stack_depth",
+    "n_vars": 1,
+    "expr": "x0",
+    "canonical": false
+  },
+  "protocol": {
+    "train_n": 256,
+    "train_domain": [
+      0.5,
+      2.5
+    ],
+    "held_n": 512,
+    "held_domain": [
+      0.25,
+      4.0
+    ],
+    "structural_rel_tol": 1e-06,
+    "success_threshold": 1e-10,
+    "max_depth": 4,
+    "n_tries": 6,
+    "dca_outer_iters": 40,
+    "dca_inner_iters": 50,
+    "workers": 2
+  },
+  "arms": {
+    "adam_softmax": {
+      "target": "stack_depth",
+      "arm": "adam_softmax",
+      "structural_recovered": true,
+      "train_snap_mse": 0.0,
+      "held_r2": 1.0,
+      "wall_clock_s": 1.0315778255462646,
+      "expr": "x",
+      "depth_found": 0,
+      "n_seeds_run": 6,
+      "total_outer_iters": 0,
+      "max_abs_err_held": 0.0,
+      "error": null
+    },
+    "adam_linear": {
+      "target": "stack_depth",
+      "arm": "adam_linear",
+      "structural_recovered": true,
+      "train_snap_mse": 0.0,
+      "held_r2": 1.0,
+      "wall_clock_s": 2.8721306324005127,
+      "expr": "x",
+      "depth_found": 0,
+      "n_seeds_run": 1,
+      "total_outer_iters": 0,
+      "max_abs_err_held": 0.0,
+      "error": null
+    },
+    "dca_linear": {
+      "target": "stack_depth",
+      "arm": "dca_linear",
+      "structural_recovered": true,
+      "train_snap_mse": 1.009283587356131e-30,
+      "held_r2": 1.0,
+      "wall_clock_s": 1.8250558376312256,
+      "expr": "x",
+      "depth_found": 0,
+      "n_seeds_run": 1,
+      "total_outer_iters": 6,
+      "max_abs_err_held": 1.7763568394002505e-15,
+      "error": null
+    }
+  }
+}

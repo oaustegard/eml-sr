@@ -1,0 +1,71 @@
+{
+  "target": {
+    "name": "complex",
+    "n_vars": 3,
+    "expr": "2*x1 + 2*x2",
+    "canonical": false
+  },
+  "protocol": {
+    "train_n": 256,
+    "train_domain": [
+      0.5,
+      2.5
+    ],
+    "held_n": 512,
+    "held_domain": [
+      0.25,
+      4.0
+    ],
+    "structural_rel_tol": 1e-06,
+    "success_threshold": 1e-10,
+    "max_depth": 4,
+    "n_tries": 6,
+    "dca_outer_iters": 40,
+    "dca_inner_iters": 50,
+    "workers": 2
+  },
+  "arms": {
+    "adam_softmax": {
+      "target": "complex",
+      "arm": "adam_softmax",
+      "structural_recovered": false,
+      "train_snap_mse": 1.5850175381876268,
+      "held_r2": 0.4379033966780356,
+      "wall_clock_s": 117.49034476280212,
+      "expr": "exp((e - ln((e - ln(x2)))))",
+      "depth_found": 3,
+      "n_seeds_run": 6,
+      "total_outer_iters": 0,
+      "max_abs_err_held": 4.632940102412867,
+      "error": null
+    },
+    "adam_linear": {
+      "target": "complex",
+      "arm": "adam_linear",
+      "structural_recovered": true,
+      "train_snap_mse": 0.0,
+      "held_r2": 1.0,
+      "wall_clock_s": 2.915357828140259,
+      "expr": "2*x2 + 2*x3",
+      "depth_found": 0,
+      "n_seeds_run": 1,
+      "total_outer_iters": 0,
+      "max_abs_err_held": 0.0,
+      "error": null
+    },
+    "dca_linear": {
+      "target": "complex",
+      "arm": "dca_linear",
+      "structural_recovered": true,
+      "train_snap_mse": 0.0,
+      "held_r2": 1.0,
+      "wall_clock_s": 2.5948641300201416,
+      "expr": "2*x2 + 2*x3",
+      "depth_found": 0,
+      "n_seeds_run": 1,
+      "total_outer_iters": 11,
+      "max_abs_err_held": 0.0,
+      "error": null
+    }
+  }
+}
