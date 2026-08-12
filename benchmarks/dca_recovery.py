@@ -74,8 +74,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from eml_dca import dca_train  # noqa: E402
-from eml_sr import DTYPE, REAL, discover
-from eml_sr_linear import (
+from eml_sr import DTYPE, REAL, discover  # noqa: E402
+from eml_sr_linear import (  # noqa: E402
     EMLTree1DLinear,
     _discreteness_penalty,
     _train_one_linear,
