@@ -106,3 +106,35 @@ basin advantage. The natural follow-ups are (a) a snap stage that
 exploits the DC structure (convex-constrained lattice projection per
 block instead of per-coefficient rounding), and (b) vectorizing
 `dc_forward` to close the 3–4× wall-clock gap.
+
+## Addendum: DC-aware snap (issue #60, branch exp/dca-snap)
+
+`eml_dca.dc_snap` implements project-and-repair: bulk-project
+near-lattice coefficients, then greedily freeze the closest-to-lattice
+free coefficient and repair the rest with a masked block-cyclic DCA
+sweep (freezing coordinates is an affine constraint, so the convexity
+certification survives), accepting each freeze on the exact G−H
+objective with candidate backtracking and a second pass for stuck
+coefficients.
+
+Three results (`results/dca_snap/`):
+
+1. **The machinery is sound.** A depth-1 exact tree perturbed to MSE
+   2.9 snaps back to exactly `eml(x, x)`, MSE 0.0 (unit-tested). A
+   depth-4 lattice-exact x0·x1 construction perturbed across all 128
+   coefficients (σ 0.15, MSE 0.47) snaps back to **exactly x0·x1**
+   (3.2e-30) in 1 of 3 perturbation seeds — the only exact x0·x1
+   recovery ever observed in this repo. The other two seeds stall at
+   0.13 / 0.85: the exact solution's attraction basin is narrow.
+2. **It does not rescue search.** Head-to-head on DCA-searched trees
+   (depths 3–4, 4 seeds each, identical search + ramp, then
+   iterative_snap vs dc_snap): 0/8 structural recoveries for either
+   snap. Search basins (MSE 0.003–0.05) are consistently far from the
+   lattice; both snaps destroy the fit (final MSE 0.5–243).
+3. **Conclusion sharpened.** The #58 framing "recovery fails at the
+   snap stage" was half right: no snap can fix a basin that isn't near
+   a lattice point. Continuous relaxation (Adam or DCA alike) finds
+   good *approximants*, not neighborhoods of exact solutions. DCA +
+   dc_snap is a sound local refinement pair awaiting a structure
+   proposer — discrete outer search (curriculum growing, #62's
+   eml-WANN) is where discovery has to come from.

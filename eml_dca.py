@@ -483,15 +483,55 @@ def dca_train(
     if not math.isfinite(cur):
         cur = float("inf")
 
+    res = _dca_sweep(tree, x_real, y_real,
+                     outer_iters=outer_iters, inner_iters=inner_iters,
+                     inner_lr=inner_lr, delta0=delta0, verbose=verbose,
+                     start_obj=cur)
+    return {
+        "tree": tree,
+        "best_mse": res["best_obj"],
+        "outer_iters_used": res["outer_iters_used"],
+        "history": res["history"],
+    }
+
+
+def _dca_sweep(
+    tree: EMLTree1DLinear,
+    x_real: torch.Tensor,
+    y_real: torch.Tensor,
+    *,
+    outer_iters: int,
+    inner_iters: int,
+    inner_lr: float,
+    delta0: float,
+    verbose: bool = False,
+    start_obj: float | None = None,
+    leaf_frozen: torch.Tensor | None = None,
+    gate_frozen: torch.Tensor | None = None,
+    stall_limit: int = 3,
+) -> dict:
+    """Block-cyclic DCA sweep over the tree's parameters, in place.
+
+    `leaf_frozen` / `gate_frozen` are boolean masks marking coordinates
+    that must NOT move (they stay at their current values). Constraining
+    each convex subproblem to the affine subspace of the free coordinates
+    preserves its convexity, so the certification and the exact G-H
+    descent check carry over unchanged — this is what makes the masked
+    sweep usable as the repair step of the DC-aware snap (issue #60).
+    """
+    depth = tree.depth
     blocks = ["leaves"] + [f"gates:{k}" for k in range(depth)]
     delta = {b: delta0 for b in blocks}
     hist = []
+    cur = (_true_mse(tree, x_real, y_real)
+           if start_obj is None else start_obj)
     n_outer_used = 0
     stall = 0
 
     for outer in range(outer_iters):
         improved_any = False
         for block in blocks:
+            frozen = leaf_frozen if block == "leaves" else gate_frozen
             leaf_k = tree.leaf_logits.detach().clone()
             gate_k = tree.gate_logits.detach().clone()
 
@@ -530,10 +570,14 @@ def dca_train(
                 opt.step()
                 with torch.no_grad():
                     theta.clamp_(base_k - delta[block], base_k + delta[block])
+                    if frozen is not None:
+                        theta[frozen] = base_k[frozen]
 
             # descent check on the exact objective
             cand = theta.detach()
             with torch.no_grad():
+                if frozen is not None:
+                    cand[frozen] = base_k[frozen]
                 if block == "leaves":
                     tree.leaf_logits.copy_(cand)
                 else:
@@ -557,12 +601,164 @@ def dca_train(
             print(f"  dca outer={outer:3d} obj={cur:.6e} "
                   f"delta_leaves={delta['leaves']:.3g}")
         stall = 0 if improved_any else stall + 1
-        if stall >= 3:
+        if stall >= stall_limit:
             break
 
-    return {
-        "tree": tree,
-        "best_mse": cur,
-        "outer_iters_used": n_outer_used,
-        "history": hist,
-    }
+    return {"best_obj": cur, "outer_iters_used": n_outer_used,
+            "history": hist}
+
+
+# ---- DC-aware snap (issue #60) -------------------------------------------
+
+LATTICE = (0.0, 1.0, -1.0, 2.0, -2.0, math.e, -math.e)
+
+
+def _lattice_candidates(v: float, k: int = 2) -> list:
+    """Ordered snap candidates for one coefficient: the k nearest of
+    {lattice points, nearest integer}, then 0.0 as a pruning fallback."""
+    pool = set(LATTICE) | {float(round(v))}
+    ranked = sorted(pool, key=lambda c: abs(v - c))
+    out = ranked[:k]
+    if 0.0 not in out:
+        out.append(0.0)
+    return out
+
+
+def _lattice_dist(v: float) -> float:
+    return min(abs(v - c) for c in set(LATTICE) | {float(round(v))})
+
+
+def dc_snap(
+    tree: EMLTree1DLinear,
+    x_data: torch.Tensor,
+    targets: torch.Tensor,
+    *,
+    round_tol: float = 0.05,
+    degrade_factor: float = 2.0,
+    abs_slack: float = 1e-9,
+    repair_outers: int = 4,
+    inner_iters: int = 30,
+    inner_lr: float = 0.01,
+    delta0: float = 0.25,
+    verbose: bool = False,
+) -> dict:
+    """Project-and-repair snap using the DC machinery (issue #60).
+
+    Instead of iterative_snap's round-one-coefficient + free-Adam
+    retrain, each projection is repaired by a masked block-cyclic DCA
+    sweep over the still-free coordinates (convexity certification
+    survives the affine freeze), and each freeze is accepted or rolled
+    back on the exact G-H objective, with per-coefficient candidate
+    backtracking ({nearest, runner-up, 0}).
+
+    Phases: (0) bulk-project every coefficient already within
+    `round_tol` of the lattice and repair once; (1) greedily freeze the
+    closest-to-lattice free coefficient, repair, accept if the exact
+    objective stays within `degrade_factor` (+`abs_slack`), otherwise
+    try the next candidate; a coefficient with no acceptable candidate
+    is marked stuck and left free. (2) any stuck stragglers are
+    hard-rounded at the end so the returned tree is fully on-lattice
+    (`n_stuck` reports how many needed that).
+    """
+    import copy
+    tree = copy.deepcopy(tree)
+    if x_data.dim() == 1:
+        x_data = x_data.unsqueeze(1)
+    x_real = x_data.real.to(REAL) if x_data.is_complex() else x_data.to(REAL)
+    y_real = (targets.real if targets.is_complex() else targets).to(REAL)
+
+    tensors = {"leaf": tree.leaf_logits, "gate": tree.gate_logits}
+    frozen = {k: torch.zeros_like(t, dtype=torch.bool)
+              for k, t in tensors.items()}
+
+    def snapshot():
+        return ({k: t.detach().clone() for k, t in tensors.items()},
+                {k: m.clone() for k, m in frozen.items()})
+
+    def restore(snap):
+        vals, masks = snap
+        with torch.no_grad():
+            for k, t in tensors.items():
+                t.copy_(vals[k])
+                frozen[k].copy_(masks[k])
+
+    def repair(outers):
+        return _dca_sweep(tree, x_real, y_real,
+                          outer_iters=outers, inner_iters=inner_iters,
+                          inner_lr=inner_lr, delta0=delta0,
+                          leaf_frozen=frozen["leaf"],
+                          gate_frozen=frozen["gate"],
+                          stall_limit=2)["best_obj"]
+
+    # Phase 0: bulk-project everything already close to the lattice.
+    with torch.no_grad():
+        for k, t in tensors.items():
+            flat = t.view(-1)
+            fm = frozen[k].view(-1)
+            for i in range(flat.numel()):
+                v = float(flat[i].item())
+                if _lattice_dist(v) <= round_tol:
+                    flat[i] = _lattice_candidates(v, k=1)[0]
+                    fm[i] = True
+    cur = repair(repair_outers)
+    # Global acceptance anchor: a per-round multiplicative limit would
+    # compound (2^rounds); every freeze is instead accepted against the
+    # post-projection starting objective.
+    obj0 = max(cur, abs_slack)
+    rounds = 0
+    stuck: set = set()
+
+    # Phase 1: freeze-and-repair the stragglers, closest first. A second
+    # pass clears the stuck set once — a coefficient that could not be
+    # frozen early often can be after the rest have settled.
+    for _sweep in range(2):
+      if _sweep == 1:
+        if not stuck:
+            break
+        stuck = set()
+      while True:
+          best_pick = None
+          for k, t in tensors.items():
+              flat = t.view(-1)
+              fm = frozen[k].view(-1)
+              for i in range(flat.numel()):
+                  if fm[i] or (k, i) in stuck:
+                      continue
+                  d = _lattice_dist(float(flat[i].item()))
+                  if best_pick is None or d < best_pick[2]:
+                      best_pick = (k, i, d)
+          if best_pick is None:
+              break
+          k, i, _ = best_pick
+          v = float(tensors[k].view(-1)[i].item())
+          snap = snapshot()
+          accepted = False
+          for cand in _lattice_candidates(v):
+              with torch.no_grad():
+                  tensors[k].view(-1)[i] = cand
+                  frozen[k].view(-1)[i] = True
+              new = repair(repair_outers)
+              limit = max(obj0 * degrade_factor, cur + abs_slack)
+              if math.isfinite(new) and new <= limit:
+                  cur = new
+                  accepted = True
+                  break
+              restore(snap)
+          if not accepted:
+              stuck.add((k, i))
+          rounds += 1
+          if verbose:
+              tag = "stuck" if not accepted else f"-> {cand:g}"
+              print(f"  dc_snap round {rounds}: {k}[{i}] {v:.4f} {tag} "
+                    f"obj={cur:.3e} free={sum((~m).sum().item() for m in frozen.values()) - len(stuck)}")
+
+    # Phase 2: hard-round anything stuck so the tree is fully lattice.
+    n_stuck = len(stuck)
+    with torch.no_grad():
+        for (k, i) in stuck:
+            v = float(tensors[k].view(-1)[i].item())
+            tensors[k].view(-1)[i] = _lattice_candidates(v, k=1)[0]
+    final = _true_mse(tree, x_real, y_real)
+
+    return {"tree": tree, "snap_mse": final, "pre_round_mse": cur,
+            "n_stuck": n_stuck, "rounds": rounds}
