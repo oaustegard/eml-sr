@@ -101,7 +101,6 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Optional
 
 import torch
 
@@ -140,7 +139,7 @@ class DCPair:
     def value(self) -> torch.Tensor:
         return self.p - self.q
 
-    def __add__(self, other: "DCPair") -> "DCPair":
+    def __add__(self, other: DCPair) -> DCPair:
         return DCPair(
             self.p + other.p, self.q + other.q,
             self.lo + other.lo, self.hi + other.hi,
@@ -148,12 +147,12 @@ class DCPair:
             self.affine and other.affine,
         )
 
-    def add_const(self, c: torch.Tensor) -> "DCPair":
+    def add_const(self, c: torch.Tensor) -> DCPair:
         """Add a per-sample constant (batch,) tensor (detached)."""
         return DCPair(self.p + c, self.q, self.lo + c, self.hi + c,
                       self.q_zero, self.affine)
 
-    def scale(self, c: float) -> "DCPair":
+    def scale(self, c: float) -> DCPair:
         if c >= 0:
             return DCPair(c * self.p, c * self.q, c * self.lo, c * self.hi,
                           self.q_zero, self.affine)
@@ -438,7 +437,7 @@ def dca_train(
     targets: torch.Tensor,
     depth: int,
     seed: int,
-    n_vars: Optional[int] = None,
+    n_vars: int | None = None,
     outer_iters: int = 40,
     inner_iters: int = 60,
     inner_lr: float = 0.02,
