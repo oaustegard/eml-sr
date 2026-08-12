@@ -459,13 +459,33 @@ def dca_train(
     if n_vars is None:
         n_vars = x_real.shape[1]
 
+    # Deep random inits can start off-domain (exp blowup / non-positive
+    # ln slots) where the exact objective is non-finite and no descent
+    # step could ever be accepted. Resample with a shrinking init scale
+    # until the starting point is finite (mirrors _train_one_linear's
+    # nan_restarts, moved to init time where DCA needs it).
+    # A pass-through gate chain (gamma ~ 1) explodes doubly-exponentially
+    # with depth (exp(exp(exp(...)))), so deep inits also damp the gamma
+    # column until the tower stays finite.
     torch.manual_seed(seed)
     tree = EMLTree1DLinear(depth, n_vars=n_vars)
+    cur = _true_mse(tree, x_real, y_real)
+    scale = 0.1
+    for attempt in range(30):
+        if math.isfinite(cur):
+            break
+        scale *= 0.7
+        torch.manual_seed(seed + 1000 * (attempt + 1))
+        tree = EMLTree1DLinear(depth, n_vars=n_vars, init_scale=scale)
+        with torch.no_grad():
+            tree.gate_logits[..., -1] *= 0.7 ** (attempt + 1)
+        cur = _true_mse(tree, x_real, y_real)
+    if not math.isfinite(cur):
+        cur = float("inf")
 
     blocks = ["leaves"] + [f"gates:{k}" for k in range(depth)]
     delta = {b: delta0 for b in blocks}
     hist = []
-    cur = _true_mse(tree, x_real, y_real)
     n_outer_used = 0
     stall = 0
 
@@ -482,8 +502,9 @@ def dca_train(
                                 x_real, y_real, block,
                                 delta[block], depth)
             active_k = leaf_v if block == "leaves" else gate_v
-            if H.requires_grad:
+            if H.requires_grad and torch.isfinite(H):
                 (gH,) = torch.autograd.grad(H, active_k)
+                gH = torch.nan_to_num(gH, nan=0.0, posinf=0.0, neginf=0.0)
             else:
                 gH = torch.zeros_like(active_k)
 
