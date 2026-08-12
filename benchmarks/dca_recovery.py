@@ -364,8 +364,14 @@ def run_linear_ladder(target: Target, X_train, y_train, X_held, y_held,
             for seed in range(n_tries):
                 n_seeds_run += 1
                 if arm == "adam_linear":
-                    raw = _train_one_linear(x_t, y_t, depth, seed,
-                                            n_vars=target.n_vars)
+                    # _train_one_linear runs a naive tree.snap() internally;
+                    # a NaN-parameter tree makes that raise (round(nan)) --
+                    # treat the seed as failed rather than aborting the arm.
+                    try:
+                        raw = _train_one_linear(x_t, y_t, depth, seed,
+                                                n_vars=target.n_vars)
+                    except (ValueError, OverflowError):
+                        continue
                     pre_snap_tree = raw["tree"]
                 else:
                     dca_res = dca_train(x_t, y_t, depth, seed,
