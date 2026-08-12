@@ -100,6 +100,7 @@ cycle leaves-first, then gate levels bottom-up.
 from __future__ import annotations
 
 import math
+from typing import Optional
 from dataclasses import dataclass
 
 import torch
@@ -678,8 +679,8 @@ def dc_snap(
     def restore(snap):
         vals, masks = snap
         with torch.no_grad():
-            for k in tensors:
-                tensors[k].copy_(vals[k])
+            for k, t in tensors.items():
+                t.copy_(vals[k])
                 frozen[k].copy_(masks[k])
 
     def repair(outers):
