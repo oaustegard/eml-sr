@@ -701,6 +701,10 @@ def dc_snap(
                     flat[i] = _lattice_candidates(v, k=1)[0]
                     fm[i] = True
     cur = repair(repair_outers)
+    # Global acceptance anchor: a per-round multiplicative limit would
+    # compound (2^rounds); every freeze is instead accepted against the
+    # post-projection starting objective.
+    obj0 = max(cur, abs_slack)
     rounds = 0
     stuck: set = set()
 
@@ -734,7 +738,7 @@ def dc_snap(
                   tensors[k].view(-1)[i] = cand
                   frozen[k].view(-1)[i] = True
               new = repair(repair_outers)
-              limit = max(cur * degrade_factor, cur + abs_slack)
+              limit = max(obj0 * degrade_factor, cur + abs_slack)
               if math.isfinite(new) and new <= limit:
                   cur = new
                   accepted = True

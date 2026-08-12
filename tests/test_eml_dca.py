@@ -338,3 +338,39 @@ class TestDcaTrain:
 
         assert r1["best_mse"] == r2["best_mse"]
         assert r1["history"] == r2["history"]
+
+
+class TestDcSnap:
+    """DC-aware project-and-repair snap (issue #60)."""
+
+    def _perturbed_exact_depth1(self):
+        torch.manual_seed(0)
+        t = EMLTree1DLinear(1, n_vars=1)
+        with torch.no_grad():
+            t.leaf_logits.copy_(torch.tensor([[0.0, 1.0], [0.0, 1.0]],
+                                             dtype=REAL))
+            t.gate_logits.copy_(torch.tensor(
+                [[[0.0, 0.0, 1.0], [0.0, 0.0, 1.0]]], dtype=REAL))
+            t.leaf_logits += torch.tensor([[0.08, -0.12], [-0.09, 0.11]],
+                                          dtype=REAL)
+            t.gate_logits += torch.randn_like(t.gate_logits) * 0.1
+        return t
+
+    def test_recovers_exact_depth1_tree(self):
+        from eml_dca import dc_snap
+        t = self._perturbed_exact_depth1()
+        x = torch.rand(128, 1, dtype=REAL) * 2 + 0.5
+        y = torch.exp(x[:, 0]) - torch.log(x[:, 0])
+        r = dc_snap(t, x, y)
+        assert r["snap_mse"] < 1e-20
+        assert r["n_stuck"] == 0
+        assert r["tree"].to_expr() == "eml(x, x)"
+
+    def test_result_keys(self):
+        from eml_dca import dc_snap
+        t = self._perturbed_exact_depth1()
+        x = torch.rand(64, 1, dtype=REAL) * 2 + 0.5
+        y = torch.exp(x[:, 0]) - torch.log(x[:, 0])
+        r = dc_snap(t, x, y, repair_outers=2)
+        for k in ("tree", "snap_mse", "pre_round_mse", "n_stuck", "rounds"):
+            assert k in r

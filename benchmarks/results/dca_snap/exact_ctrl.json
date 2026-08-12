@@ -1,0 +1,26 @@
+{
+ "exact_mse": 3.1554436208840472e-30,
+ "trials": [
+  {
+   "seed": 0,
+   "perturbed_mse": 0.4742340433946879,
+   "snap_mse": 3.1554436208840472e-30,
+   "stuck": 5,
+   "rounds": 131
+  },
+  {
+   "seed": 1,
+   "perturbed_mse": 0.7211430391630707,
+   "snap_mse": 0.13433886939080253,
+   "stuck": 1,
+   "rounds": 129
+  },
+  {
+   "seed": 2,
+   "perturbed_mse": 1.2359693429001979,
+   "snap_mse": 0.8543083205231774,
+   "stuck": 2,
+   "rounds": 132
+  }
+ ]
+}
