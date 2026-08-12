@@ -100,7 +100,6 @@ cycle leaves-first, then gate levels bottom-up.
 from __future__ import annotations
 
 import math
-from typing import Optional
 from dataclasses import dataclass
 
 import torch
@@ -506,9 +505,9 @@ def _dca_sweep(
     inner_lr: float,
     delta0: float,
     verbose: bool = False,
-    start_obj: Optional[float] = None,
-    leaf_frozen: Optional[torch.Tensor] = None,
-    gate_frozen: Optional[torch.Tensor] = None,
+    start_obj: float | None = None,
+    leaf_frozen: torch.Tensor | None = None,
+    gate_frozen: torch.Tensor | None = None,
     stall_limit: int = 3,
 ) -> dict:
     """Block-cyclic DCA sweep over the tree's parameters, in place.
