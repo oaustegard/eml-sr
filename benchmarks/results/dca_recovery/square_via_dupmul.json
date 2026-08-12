@@ -1,0 +1,71 @@
+{
+  "target": {
+    "name": "square_via_dupmul",
+    "n_vars": 1,
+    "expr": "x0**2",
+    "canonical": false
+  },
+  "protocol": {
+    "train_n": 256,
+    "train_domain": [
+      0.5,
+      2.5
+    ],
+    "held_n": 512,
+    "held_domain": [
+      0.25,
+      4.0
+    ],
+    "structural_rel_tol": 1e-06,
+    "success_threshold": 1e-10,
+    "max_depth": 4,
+    "n_tries": 6,
+    "dca_outer_iters": 40,
+    "dca_inner_iters": 50,
+    "workers": 2
+  },
+  "arms": {
+    "adam_softmax": {
+      "target": "square_via_dupmul",
+      "arm": "adam_softmax",
+      "structural_recovered": false,
+      "train_snap_mse": 1.4112226115399973,
+      "held_r2": -4.973229152517448,
+      "wall_clock_s": 152.65053153038025,
+      "expr": "(exp(x) - e)",
+      "depth_found": 3,
+      "n_seeds_run": 6,
+      "total_outer_iters": 0,
+      "max_abs_err_held": 35.73668930046576,
+      "error": null
+    },
+    "adam_linear": {
+      "target": "square_via_dupmul",
+      "arm": "adam_linear",
+      "structural_recovered": false,
+      "train_snap_mse": 0.0012818158146440891,
+      "held_r2": 0.8859133296852513,
+      "wall_clock_s": 861.246260881424,
+      "expr": "eml(0.693*x + 0.374*(1), 1 + 2*(e))",
+      "depth_found": 1,
+      "n_seeds_run": 30,
+      "total_outer_iters": 0,
+      "max_abs_err_held": 5.378371294240484,
+      "error": null
+    },
+    "dca_linear": {
+      "target": "square_via_dupmul",
+      "arm": "dca_linear",
+      "structural_recovered": false,
+      "train_snap_mse": 0.0019466554001464392,
+      "held_r2": 0.7306602137920319,
+      "wall_clock_s": 3201.858897924423,
+      "expr": "eml(0.766*x, 2*(2 - 0.503*x))",
+      "depth_found": 1,
+      "n_seeds_run": 30,
+      "total_outer_iters": 878,
+      "max_abs_err_held": 11.209935675683527,
+      "error": null
+    }
+  }
+}

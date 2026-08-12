@@ -1,0 +1,71 @@
+{
+  "target": {
+    "name": "dup_add",
+    "n_vars": 1,
+    "expr": "2*x0",
+    "canonical": false
+  },
+  "protocol": {
+    "train_n": 256,
+    "train_domain": [
+      0.5,
+      2.5
+    ],
+    "held_n": 512,
+    "held_domain": [
+      0.25,
+      4.0
+    ],
+    "structural_rel_tol": 1e-06,
+    "success_threshold": 1e-10,
+    "max_depth": 4,
+    "n_tries": 6,
+    "dca_outer_iters": 40,
+    "dca_inner_iters": 50,
+    "workers": 2
+  },
+  "arms": {
+    "adam_softmax": {
+      "target": "dup_add",
+      "arm": "adam_softmax",
+      "structural_recovered": false,
+      "train_snap_mse": 1.3760167493768372,
+      "held_r2": -0.5067939854115091,
+      "wall_clock_s": 88.25220704078674,
+      "expr": "e",
+      "depth_found": 1,
+      "n_seeds_run": 6,
+      "total_outer_iters": 0,
+      "max_abs_err_held": 5.280708127377304,
+      "error": null
+    },
+    "adam_linear": {
+      "target": "dup_add",
+      "arm": "adam_linear",
+      "structural_recovered": true,
+      "train_snap_mse": 0.0,
+      "held_r2": 1.0,
+      "wall_clock_s": 2.6325035095214844,
+      "expr": "2*x",
+      "depth_found": 0,
+      "n_seeds_run": 1,
+      "total_outer_iters": 0,
+      "max_abs_err_held": 0.0,
+      "error": null
+    },
+    "dca_linear": {
+      "target": "dup_add",
+      "arm": "dca_linear",
+      "structural_recovered": true,
+      "train_snap_mse": 1.245556672933557e-29,
+      "held_r2": 1.0,
+      "wall_clock_s": 1.8450641632080078,
+      "expr": "2*x",
+      "depth_found": 0,
+      "n_seeds_run": 1,
+      "total_outer_iters": 8,
+      "max_abs_err_held": 7.105427357601002e-15,
+      "error": null
+    }
+  }
+}
