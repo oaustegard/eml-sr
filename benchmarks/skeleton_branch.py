@@ -190,48 +190,52 @@ def _confirm(u_entry, v_entry, a_u, g_u, a_v, g_v,
 
 def join_search(cache: dict, y_scr: np.ndarray,
                  X_train: np.ndarray, y_train: np.ndarray,
-                 X_held: np.ndarray, y_held: np.ndarray):
+                 X_held: np.ndarray, y_held: np.ndarray,
+                 shard: str = "0/1"):
     """For every cached U-entry and every (a_u, g_u), algebraically solve
-    for the required v_in / V and look it up in the same cache."""
-    entries = list(cache.values())
+    for the required v_in / V and look it up in the same cache.
+
+    Vectorized over chunks of U-entries; only finite candidate rows pay
+    the per-row hash lookup. `shard` = "i/n" stripes the U-entries.
+    """
+    shard_i, shard_n = (int(v) for v in shard.split("/"))
+    entries = list(cache.values())[shard_i::shard_n]
     joins_tested = 0
     hits = 0
     discoveries = []
     t0 = time.time()
+    CHUNK = 65536
 
-    for entry_idx, u_entry in enumerate(entries):
-        U_scr = u_entry[3]
+    for start in range(0, len(entries), CHUNK):
+        block = entries[start:start + CHUNK]
+        U = np.stack([e[3] for e in block])  # (c, n_screen)
         for a_u in ALPHAS:
             for g_u in GAMMAS:
                 with np.errstate(all="ignore"):
-                    P = np.exp(a_u + g_u * U_scr)
-                if not np.all(np.isfinite(P)):
-                    continue
-                # required ln(v_in) = P - y_screen
-                with np.errstate(all="ignore"):
-                    v_in_req = np.exp(P - y_scr)
+                    P = np.exp(a_u + g_u * U)
+                    v_in_req = np.exp(P - y_scr[None, :])
                 for a_v in ALPHAS:
                     for g_v in GAMMAS:
-                        joins_tested += 1
+                        joins_tested += len(block)
                         with np.errstate(all="ignore"):
                             V_req = (v_in_req - a_v) / g_v
-                        if not np.all(np.isfinite(V_req)):
-                            continue
-                        with np.errstate(all="ignore"):
-                            key2 = np.round(V_req, 8).tobytes()
-                        v_entry = cache.get(key2)
-                        if v_entry is None:
-                            continue
-                        hits += 1
-                        disc = _confirm(u_entry, v_entry, a_u, g_u, a_v, g_v,
-                                        X_train, y_train, X_held, y_held)
-                        if disc is not None:
-                            discoveries.append(disc)
-        if (entry_idx + 1) % 50000 == 0:
-            print(f"  join: {entry_idx + 1}/{len(entries)} U-entries, "
-                  f"{joins_tested} joins tested, {hits} hash hits, "
-                  f"{len(discoveries)} discoveries, "
-                  f"{time.time() - t0:.0f}s", flush=True)
+                            Vr = np.round(V_req, 8)
+                        ok = np.isfinite(V_req).all(axis=1)
+                        for ri in np.nonzero(ok)[0]:
+                            v_entry = cache.get(Vr[ri].tobytes())
+                            if v_entry is None:
+                                continue
+                            hits += 1
+                            disc = _confirm(block[ri], v_entry, a_u, g_u,
+                                            a_v, g_v, X_train, y_train,
+                                            X_held, y_held)
+                            if disc is not None:
+                                discoveries.append(disc)
+        done = min(start + CHUNK, len(entries))
+        print(f"  join: {done}/{len(entries)} U-entries, "
+              f"{joins_tested} joins tested, {hits} hash hits, "
+              f"{len(discoveries)} discoveries, "
+              f"{time.time() - t0:.0f}s", flush=True)
 
     return joins_tested, hits, discoveries
 
@@ -293,6 +297,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--target", choices=sorted(TARGETS))
     ap.add_argument("--max-side-depth", type=int, default=3)
+    ap.add_argument("--join-shard", default="0/1")
     ap.add_argument("--out-dir", default="benchmarks/results/skeleton_enum")
     ap.add_argument("--self-test", action="store_true",
                     help="run the join-algebra self-test and exit")
@@ -328,13 +333,14 @@ def main() -> int:
 
     t1 = time.time()
     joins_tested, hits, discoveries = join_search(
-        cache, y_scr, X, y, X_held, y_held)
+        cache, y_scr, X, y, X_held, y_held, shard=args.join_shard)
     join_wall = time.time() - t1
     wall = time.time() - t0
 
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    out = out_dir / f"{args.target}_branch.json"
+    shard_tag = "" if args.join_shard == "0/1" else "_js" + args.join_shard.replace("/", "of")
+    out = out_dir / f"{args.target}_branch{shard_tag}.json"
     json.dump({
         "target": args.target, "max_side_depth": args.max_side_depth,
         "n_vars": n_vars, "cache_size": len(cache),
