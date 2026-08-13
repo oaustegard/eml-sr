@@ -47,7 +47,7 @@ from benchmarks.skeleton_enum import (  # noqa: E402
 )
 
 ALPHAS = (0.0, 1.0, 2.0, -1.0)
-GAMMAS = (1.0, -1.0)
+GAMMAS = (1.0, -1.0, 2.0, -2.0)
 STRUCT_TOL = 1e-6
 SCREEN_N = 16
 SCREEN_TOL = 1e-9  # mse on the screen batch to qualify for re-scoring
