@@ -1,0 +1,9 @@
+{
+ "target": "sum_of_squares",
+ "depth": 4,
+ "n_skeletons": 25000,
+ "n_assignments": 134217728,
+ "wall_s": 421.77890610694885,
+ "n_found": 0,
+ "found": []
+}
