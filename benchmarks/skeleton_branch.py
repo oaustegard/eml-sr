@@ -288,8 +288,16 @@ def self_test() -> bool:
 # ─── Driver ─────────────────────────────────────────────────────────
 
 TARGETS = {
-    "sum_of_squares": {"n_vars": 4, "fn": lambda X: X[:, 0] ** 2 + X[:, 3] ** 2},
-    "native_multiply": {"n_vars": 2, "fn": lambda X: X[:, 0] * X[:, 1]},
+    "native_multiply": dict(n_vars=2, fn=lambda X: X[:, 0] * X[:, 1]),
+    "sum_of_squares": dict(n_vars=4,
+                           fn=lambda X: X[:, 0] ** 2 + X[:, 3] ** 2),
+    # Well-known-formula tier (Feynman-style shapes)
+    "triple_product": dict(n_vars=3,
+                           fn=lambda X: X[:, 0] * X[:, 1] * X[:, 2]),
+    "kinetic_energy": dict(n_vars=2,
+                           fn=lambda X: 0.5 * X[:, 0] * X[:, 1] ** 2),
+    "hypotenuse": dict(n_vars=2,
+                       fn=lambda X: np.sqrt(X[:, 0] ** 2 + X[:, 1] ** 2)),
 }
 
 

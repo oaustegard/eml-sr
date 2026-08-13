@@ -1,0 +1,15 @@
+{
+ "target": "hypotenuse",
+ "max_side_depth": 3,
+ "n_vars": 2,
+ "cache_size": 247718,
+ "n_cache_skeletons": 393,
+ "n_cache_assignments": 1334058,
+ "cache_wall_s": 6.6004798412323,
+ "joins_tested": 63415808,
+ "hash_hits": 0,
+ "join_wall_s": 27.95373821258545,
+ "wall_s": 34.55428957939148,
+ "n_discoveries": 0,
+ "discoveries": []
+}
