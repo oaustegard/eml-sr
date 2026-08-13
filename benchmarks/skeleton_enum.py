@@ -45,9 +45,9 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from eml_dca import _dca_sweep, _gate_level_slices, dc_snap
-from eml_sr import REAL
-from eml_sr_linear import EMLTree1DLinear
+from eml_dca import _dca_sweep, _gate_level_slices, dc_snap  # noqa: E402
+from eml_sr import REAL  # noqa: E402
+from eml_sr_linear import EMLTree1DLinear  # noqa: E402
 
 TRAIN_N = 256
 TRAIN_DOMAIN = (0.5, 2.5)
