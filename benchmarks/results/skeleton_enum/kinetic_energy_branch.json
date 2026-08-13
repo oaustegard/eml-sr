@@ -1,0 +1,15 @@
+{
+ "target": "kinetic_energy",
+ "max_side_depth": 3,
+ "n_vars": 2,
+ "cache_size": 248261,
+ "n_cache_skeletons": 393,
+ "n_cache_assignments": 1334058,
+ "cache_wall_s": 7.0647804737091064,
+ "joins_tested": 63554816,
+ "hash_hits": 0,
+ "join_wall_s": 30.51245951652527,
+ "wall_s": 37.57732367515564,
+ "n_discoveries": 0,
+ "discoveries": []
+}
