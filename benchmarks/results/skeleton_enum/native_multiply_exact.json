@@ -1,0 +1,20 @@
+{
+ "target": "native_multiply",
+ "depth": 4,
+ "n_skeletons": 1944,
+ "n_assignments": 31850496,
+ "wall_s": 113.95357036590576,
+ "n_found": 2,
+ "found": [
+  {
+   "spec": "((('u', 'const'), ('u', 'var:0'), ('v', 'const')), ('const', 'var:1'))",
+   "expr": "eml(2 + -1*(eml(1 + -1*(eml(0, 1 + 1*(eml(0, x1)))), x0)), 1)",
+   "held_max_err": 5.329070518200751e-15
+  },
+  {
+   "spec": "((('u', 'const'), ('u', 'var:1'), ('v', 'const')), ('const', 'var:0'))",
+   "expr": "eml(2 + -1*(eml(1 + -1*(eml(0, 1 + 1*(eml(0, x0)))), x1)), 1)",
+   "held_max_err": 5.329070518200751e-15
+  }
+ ]
+}

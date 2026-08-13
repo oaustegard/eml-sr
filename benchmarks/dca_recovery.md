@@ -138,3 +138,33 @@ Three results (`results/dca_snap/`):
    dc_snap is a sound local refinement pair awaiting a structure
    proposer — discrete outer search (curriculum growing, #62's
    eml-WANN) is where discovery has to come from.
+
+## Addendum 2: chain-skeleton enumeration discovers the multiplicative targets (branch exp/skeleton-enum)
+
+The proposer experiment #58/#60 pointed at. Enumerate chain topologies
+(D eml nodes, each feeding one slot of its parent; the other slot reads
+a constant or one variable) with lattice-valued slots (α ∈ {0,1,2,−1},
+γ ∈ {±1}, unit slopes), scored exactly by a vectorized chain evaluator
+with a 16-sample screen — no gradients, no seeding, no target
+knowledge (`benchmarks/skeleton_exact.py`).
+
+| target | skeletons | assignments | wall | exact discoveries |
+|---|---:|---:|---:|---|
+| x0·x1 | 1,944 | 31.9M | 114 s | **2** (the depth-4 construction + its variable swap) |
+| x0² | 256 | 12.8M | 55 s | **1** |
+| x0² + x3² | 25,000 | 134M | 422 s | 0 — sums of nonlinear terms need *branched* skeletons, outside the chain family |
+
+Both canonical multiplicative failures are structurally discovered
+from enumeration alone in ~1–2 minutes — where ~11 CPU-hours of
+continuous optimization (Adam and DCA, softmax and linear
+parameterizations, two snap algorithms) recovered neither. A
+continuous-refinement probe on the same skeletons
+(`benchmarks/skeleton_enum.py`) confirms why: even *given* the true
+skeleton, 30 masked-DCA restarts (random and lattice inits) stall at
+objective ~0.9 — the exact solution's basin is tiny, matching the
+dc_snap perturbation control.
+
+Conclusion for #62: discrete structure search is decisively the right
+axis. The chain family is solved; the next family is branched
+skeletons (two chains joined by an additive node covers
+x0² + x3²-shaped targets), with the same exact vectorized scoring.

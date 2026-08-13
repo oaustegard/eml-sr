@@ -1,0 +1,15 @@
+{
+ "target": "square_via_dupmul",
+ "depth": 4,
+ "n_skeletons": 256,
+ "n_assignments": 12800000,
+ "wall_s": 55.235207080841064,
+ "n_found": 1,
+ "found": [
+  {
+   "spec": "((('u', 'const'), ('u', 'var:0'), ('v', 'const')), ('const', 'var:0'))",
+   "expr": "eml(2 + -1*(eml(1 + -1*(eml(0, 1 + 1*(eml(0, x0)))), x0)), 1)",
+   "held_max_err": 3.552713678800501e-15
+  }
+ ]
+}
