@@ -37,7 +37,7 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from benchmarks.skeleton_branch import (
+from benchmarks.skeleton_branch import (  # noqa: E402
     BARE_CONSTS,
     TARGETS,
     TRAIN_MSE_TOL,
@@ -45,7 +45,7 @@ from benchmarks.skeleton_branch import (
     entry_to_expr,
     eval_entry_full,
 )
-from benchmarks.skeleton_exact import (
+from benchmarks.skeleton_exact import (  # noqa: E402
     ALPHAS,
     GAMMAS,
     HELD_DOMAIN,
