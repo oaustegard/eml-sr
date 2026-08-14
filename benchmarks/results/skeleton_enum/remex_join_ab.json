@@ -1,0 +1,32 @@
+{
+ "target": "sum_of_squares",
+ "max_side_depth": 3,
+ "cache_entries": 985467,
+ "note": "remex-8bit arm capped after 52min in normalization-collapse buckets; 4-bit arm previously capped at 66min for the same reason",
+ "results": [
+  {
+   "label": "exact-f64",
+   "discoveries": 32,
+   "hash_hits": 244,
+   "key_bytes": 126139776,
+   "wall_s": 167.5,
+   "max_bucket": 1
+  },
+  {
+   "label": "arcsinh-int16",
+   "discoveries": 473,
+   "hash_hits": 16402595,
+   "key_bytes": 25068704,
+   "wall_s": 541.7,
+   "max_bucket": 5568
+  },
+  {
+   "label": "remex-4bit-normed",
+   "outcome": "capped: collision storm from unit-norm direction collapse on constant-direction families + float32 norm overflow pre-arcsinh"
+  },
+  {
+   "label": "remex-8bit-normed",
+   "outcome": "capped: same mechanism"
+  }
+ ]
+}
