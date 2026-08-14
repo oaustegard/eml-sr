@@ -129,24 +129,29 @@ def build_cache(n_vars: int, max_side_depth: int, X_scr: np.ndarray):
                 break
             f = frontier.shape[0]
             g_idx = np.arange(n_rows - f, n_rows, dtype=np.int32)
-            new_v, new_p = [], []
+            # Per-step (and per-frontier-slice) dedupe: a 10M frontier x
+            # 512 steps would otherwise concatenate ~5e9 candidate rows
+            # before deduping. Kept rows per step are tiny; stream them.
+            kept_v = []
+            FCH = 2_000_000
             for sid, (side, a, g, t) in enumerate(steps):
                 other = terms[t][None, :]
-                with np.errstate(all="ignore"):
-                    fed = a + g * frontier
-                    val = (np.exp(fed) - np.log(other) if side == 0
-                           else np.exp(other) - np.log(fed))
-                oi = np.nonzero(np.isfinite(val).all(axis=1))[0]
-                if oi.size == 0:
-                    continue
-                pr = np.empty((oi.size, 2), dtype=np.int32)
-                pr[:, 0] = g_idx[oi]
-                pr[:, 1] = sid
-                new_v.append(val[oi])
-                new_p.append(pr)
-            frontier = (add_block(np.concatenate(new_v),
-                                  np.concatenate(new_p))
-                        if new_v else None)
+                for fs in range(0, f, FCH):
+                    F = frontier[fs:fs + FCH]
+                    with np.errstate(all="ignore"):
+                        fed = a + g * F
+                        val = (np.exp(fed) - np.log(other) if side == 0
+                               else np.exp(other) - np.log(fed))
+                    oi = np.nonzero(np.isfinite(val).all(axis=1))[0]
+                    if oi.size == 0:
+                        continue
+                    pr = np.empty((oi.size, 2), dtype=np.int32)
+                    pr[:, 0] = g_idx[fs + oi]
+                    pr[:, 1] = sid
+                    kept = add_block(val[oi], pr)
+                    if kept is not None:
+                        kept_v.append(kept)
+            frontier = np.concatenate(kept_v) if kept_v else None
             print(f"  build: depth {depth}, {n_rows} rows, "
                   f"{time.time() - t0:.0f}s", flush=True)
 
