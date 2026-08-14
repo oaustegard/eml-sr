@@ -1,0 +1,10 @@
+{
+ "target": "triple_product",
+ "max_side_depth": 4,
+ "cache_rows": 21532608,
+ "hash_hits": 2528895552,
+ "screened": 0,
+ "n_discoveries": 0,
+ "wall_s": 8229.670374393463,
+ "discoveries": []
+}
