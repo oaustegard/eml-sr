@@ -5,7 +5,7 @@
  "hash_hits": 4872452,
  "screened": 26,
  "n_discoveries": 13,
- "wall_s": 97.85792589187622,
+ "wall_s": 87.20807361602783,
  "discoveries": [
   {
    "expr": "eml(2 + -1*(eml(1 + -1*(eml(0, 1 + 1*(eml(0, x1)))), x0)), 1*(1))",
