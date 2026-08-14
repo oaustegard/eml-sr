@@ -51,7 +51,7 @@ from benchmarks.skeleton_exact import (
     TRAIN_N,
 )
 
-KEY_RES = 0.01
+KEY_RES = 0.05
 BARE_CONSTS = (0.0, 1.0, 2.0, -1.0)
 
 
@@ -66,6 +66,22 @@ def quantize_keys(V: np.ndarray) -> np.ndarray:
 def _void_view(codes: np.ndarray) -> np.ndarray:
     c = np.ascontiguousarray(codes)
     return c.view([("", c.dtype)] * c.shape[1]).ravel()
+
+
+_HASH_MULT = np.array([0x9E3779B97F4A7C15 + 2 * k + 1
+                       for k in range(64)], dtype=np.uint64)
+
+
+def code_hash(codes: np.ndarray) -> np.ndarray:
+    """(n, d) int16 codes -> (n,) uint64 keys. Multiply-accumulate with
+    fixed odd constants (wrapping): fast searchsorted/isin paths, 8 B
+    per key. A 64-bit collision either drops one near-duplicate cache
+    row or adds one spurious join candidate — both absorbed downstream.
+    """
+    u = codes.astype(np.int64).astype(np.uint64)
+    with np.errstate(over="ignore"):
+        return (u * _HASH_MULT[None, : codes.shape[1]]).sum(
+            axis=1, dtype=np.uint64)
 
 
 # ─── Steps (single-node chain extensions) ───────────────────────────
@@ -90,29 +106,58 @@ def term_matrix(n_vars: int, X: np.ndarray) -> np.ndarray:
 # ─── Cache build ────────────────────────────────────────────────────
 
 def build_cache(n_vars: int, max_side_depth: int, X_scr: np.ndarray):
-    """Returns (values32 (N,s), prov (N,2) int32, steps)."""
+    """Returns (values32 (N,s), prov (N,2) int32, steps).
+
+    Dedupe uses flat numpy code arrays (32 B/row), not a Python set —
+    object overhead OOM'd the level-4 build at ~16 GB. A sorted main
+    array plus a small pending tail gives O(log N) membership with
+    periodic merges.
+    """
     steps = make_steps(n_vars)
     terms = term_matrix(n_vars, X_scr)
-    seen = set()
     blocks, prov_blocks = [], []
     n_rows = 0
     t0 = time.time()
 
+    main_codes = None      # sorted void array
+    pending = []           # list of small void arrays, unsorted
+    pending_n = 0
+    MERGE_AT = 4_000_000
+
+    def _membership(q):
+        """Boolean: which rows of void-array q are already seen."""
+        seen_mask = np.zeros(q.shape[0], dtype=bool)
+        if main_codes is not None and main_codes.shape[0]:
+            pos = np.searchsorted(main_codes, q)
+            pos = np.clip(pos, 0, main_codes.shape[0] - 1)
+            seen_mask |= main_codes[pos] == q
+        for p in pending:
+            seen_mask |= np.isin(q, p)
+        return seen_mask
+
+    def _merge_pending():
+        nonlocal main_codes, pending, pending_n
+        if not pending:
+            return
+        parts = ([main_codes] if main_codes is not None else []) + pending
+        main_codes = np.sort(np.concatenate(parts))
+        pending = []
+        pending_n = 0
+
     def add_block(vals64, prov_rows):
-        nonlocal n_rows
+        nonlocal n_rows, pending_n
         if vals64.shape[0] == 0:
             return None
-        cv = _void_view(quantize_keys(vals64))
-        _, first = np.unique(cv, return_index=True)
-        keep = []
-        for fi in first:
-            k = cv[fi].tobytes()
-            if k not in seen:
-                seen.add(k)
-                keep.append(int(fi))
-        if not keep:
+        cv = code_hash(quantize_keys(vals64))
+        uq, first = np.unique(cv, return_index=True)
+        new_mask = ~_membership(uq)
+        if not new_mask.any():
             return None
-        keep = np.array(keep)
+        keep = first[new_mask]
+        pending.append(uq[new_mask])
+        pending_n += int(new_mask.sum())
+        if pending_n > MERGE_AT:
+            _merge_pending()
         blocks.append(vals64[keep].astype(np.float32))
         prov_blocks.append(prov_rows[keep])
         n_rows += len(keep)
@@ -129,9 +174,6 @@ def build_cache(n_vars: int, max_side_depth: int, X_scr: np.ndarray):
                 break
             f = frontier.shape[0]
             g_idx = np.arange(n_rows - f, n_rows, dtype=np.int32)
-            # Per-step (and per-frontier-slice) dedupe: a 10M frontier x
-            # 512 steps would otherwise concatenate ~5e9 candidate rows
-            # before deduping. Kept rows per step are tiny; stream them.
             kept_v = []
             FCH = 2_000_000
             for sid, (side, a, g, t) in enumerate(steps):
@@ -150,8 +192,8 @@ def build_cache(n_vars: int, max_side_depth: int, X_scr: np.ndarray):
                     pr[:, 1] = sid
                     kept = add_block(val[oi], pr)
                     if kept is not None and depth < max_side_depth:
-                        # the final level's frontier is never expanded
                         kept_v.append(kept.astype(np.float32))
+            _merge_pending()
             frontier = (np.concatenate(kept_v).astype(np.float64)
                         if kept_v else None)
             print(f"  build: depth {depth}, {n_rows} rows, "
@@ -201,9 +243,9 @@ def row_expr(row: int, prov: np.ndarray, steps, n_vars: int) -> str:
 
 def join_search(values32, prov, steps, n_vars, y_scr,
                 X_train, y_train, X_held, y_held):
-    codes = quantize_keys(values32.astype(np.float64))
-    order = np.argsort(_void_view(codes), kind="stable")
-    sorted_codes = _void_view(codes[order])
+    codes = code_hash(quantize_keys(values32.astype(np.float64)))
+    order = np.argsort(codes, kind="stable")
+    sorted_codes = codes[order]
 
     N = values32.shape[0]
     hits = screened = 0
@@ -226,32 +268,39 @@ def join_search(values32, prov, steps, n_vars, y_scr,
                         idx = np.nonzero(ok)[0]
                         if idx.size == 0:
                             continue
-                        q = _void_view(quantize_keys(V_req[idx]))
+                        q = code_hash(quantize_keys(V_req[idx]))
                         lo = np.searchsorted(sorted_codes, q, "left")
                         hi = np.searchsorted(sorted_codes, q, "right")
-                        for r in np.nonzero(hi > lo)[0]:
-                            for s in range(int(lo[r]), int(hi[r])):
-                                vi = int(order[s])
-                                hits += 1
-                                j = start + int(idx[r])
-                                with np.errstate(all="ignore"):
-                                    y_s = (np.exp(a_u + g_u * U[idx[r]])
-                                           - np.log(a_v + g_v
-                                                    * values32[vi]
-                                                    .astype(np.float64)))
-                                    d = y_s - y_scr
-                                if not (np.all(np.isfinite(d)) and
-                                        float(np.mean(d ** 2)) < 1e-7):
-                                    continue
-                                screened += 1
-                                disc = _confirm(j, vi, a_u, g_u, a_v, g_v,
-                                                prov, steps, n_vars,
-                                                X_train, y_train,
-                                                X_held, y_held)
-                                if disc and disc["expr"] not in seen_forms:
-                                    seen_forms.add(disc["expr"])
-                                    discoveries.append(disc)
-        if (ci + 1) % 20 == 0 or ci == n_chunks - 1:
+                        nz = np.nonzero(hi > lo)[0]
+                        if nz.size == 0:
+                            continue
+                        counts = (hi[nz] - lo[nz]).astype(np.int64)
+                        qr_a = np.repeat(nz, counts)
+                        s_a = np.concatenate(
+                            [np.arange(int(lo[r]), int(hi[r]))
+                             for r in nz])
+                        vi_a = order[s_a]
+                        hits += len(vi_a)
+                        with np.errstate(all="ignore"):
+                            y_s = (np.exp(a_u + g_u * U[idx[qr_a]])
+                                   - np.log(a_v + g_v
+                                            * values32[vi_a]
+                                            .astype(np.float64)))
+                            d = y_s - y_scr[None, :]
+                            ok_s = (np.isfinite(d).all(axis=1)
+                                    & (np.mean(d ** 2, axis=1) < 1e-7))
+                        for w in np.nonzero(ok_s)[0]:
+                            screened += 1
+                            j2 = start + int(idx[qr_a[w]])
+                            vi = int(vi_a[w])
+                            disc = _confirm(j2, vi, a_u, g_u, a_v, g_v,
+                                            prov, steps, n_vars,
+                                            X_train, y_train,
+                                            X_held, y_held)
+                            if disc and disc["expr"] not in seen_forms:
+                                seen_forms.add(disc["expr"])
+                                discoveries.append(disc)
+        if (ci + 1) % 4 == 0 or ci == n_chunks - 1:
             print(f"  join: chunk {ci + 1}/{n_chunks}, {hits} hits, "
                   f"{screened} screened, {len(discoveries)} confirmed, "
                   f"{time.time() - t0:.0f}s", flush=True)
