@@ -149,9 +149,11 @@ def build_cache(n_vars: int, max_side_depth: int, X_scr: np.ndarray):
                     pr[:, 0] = g_idx[fs + oi]
                     pr[:, 1] = sid
                     kept = add_block(val[oi], pr)
-                    if kept is not None:
-                        kept_v.append(kept)
-            frontier = np.concatenate(kept_v) if kept_v else None
+                    if kept is not None and depth < max_side_depth:
+                        # the final level's frontier is never expanded
+                        kept_v.append(kept.astype(np.float32))
+            frontier = (np.concatenate(kept_v).astype(np.float64)
+                        if kept_v else None)
             print(f"  build: depth {depth}, {n_rows} rows, "
                   f"{time.time() - t0:.0f}s", flush=True)
 
