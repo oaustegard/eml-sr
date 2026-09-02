@@ -1,0 +1,41 @@
+{
+ "target": "triple_product",
+ "chain_nodes": 6,
+ "engine_max_path_nodes": 5,
+ "variants": [
+  {
+   "c": 0.0,
+   "expr": "eml(2 + -1*(eml(1 + -1*(eml(0, 1*(eml(1 + -1*(eml(0, 1 + 1*(eml(0, x1)))), x0)))), x2)), 1)",
+   "links_on_lattice": true,
+   "off_lattice_alphas": [],
+   "train": {
+    "max_abs_err": 3.552713678800501e-15,
+    "n_nonfinite": 0,
+    "structural": true
+   },
+   "held": {
+    "max_abs_err": 7.105427357601002e-15,
+    "n_nonfinite": 119,
+    "structural": false
+   }
+  },
+  {
+   "c": 1.0,
+   "expr": "eml(3 + -1*(eml(1 + -1*(eml(0, 1 + 1*(eml(1 + -1*(eml(0, 1 + 1*(eml(0, x1)))), x0)))), x2)), 1)",
+   "links_on_lattice": false,
+   "off_lattice_alphas": [
+    3.0
+   ],
+   "train": {
+    "max_abs_err": 5.329070518200751e-15,
+    "n_nonfinite": 0,
+    "structural": true
+   },
+   "held": {
+    "max_abs_err": 2.1316282072803006e-14,
+    "n_nonfinite": 0,
+    "structural": true
+   }
+  }
+ ]
+}
