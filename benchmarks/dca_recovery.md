@@ -168,3 +168,45 @@ Conclusion for #62: discrete structure search is decisively the right
 axis. The chain family is solved; the next family is branched
 skeletons (two chains joined by an additive node covers
 x0² + x3²-shaped targets), with the same exact vectorized scoring.
+
+## Addendum 3: x·y·z is a six-node chain; the join engine's zero is a depth cap (session 2026-09-02)
+
+PR #67 reported 0 forms for `triple_product` in 2.53 billion joins of the
+[chain ≤ 4] × join × [chain ≤ 4] family and read the zero as a boundary of
+the operator: each `exp` crossing converts the accumulated log-carrier into
+one product factor, the third factor exits wrapped in `exp` contamination.
+`benchmarks/xyz_chain_witness.py` evaluates an explicit chain through
+`skeleton_exact.eval_chain` on the harness's own data:
+
+```
+N1 = eml(0, x1)            = 1 − ln x1
+E  = eml(0, 1 + N1)        = 1 − ln(2 − ln x1)
+N2 = eml(1 − E, x0)        = (2 − ln x1) − ln x0        ← PR #64's x0·x1 interior
+F  = eml(0, c + N2)        = 1 − ln(c + N2)
+N3 = eml(1 − F, x2)        = c + 2 − (ln x0 + ln x1 + ln x2)
+y  = eml((c + 2) − N3, 1)  = x0·x1·x2
+```
+
+Six `eml` nodes, one chain, every link on the `(α, γ)` lattice
+(`results/skeleton_enum/triple_product_chain_witness.json`):
+
+| variant | lattice | train (0.5, 2.5) | held-out (0.25, 4) |
+|---|---|---|---|
+| `c = 0`, root offset 2 | on | max err 3.6e-15, structural | 119 of 512 non-finite (`x0·x1 > e²` makes the carrier negative) |
+| `c = 1`, root offset 3 | root α = 3 off `ALPHAS` | 5.3e-15, structural | 2.1e-14, structural |
+
+The join engine's longest path is a side chain of four plus the root, five
+nodes. The third log needs two more nodes than the second (one `eml(0, ·)` to
+extract the carrier's logarithm, one to add the next factor), so `x·y·z` sits
+one accumulation step past the cap. The "contamination" reading was the view
+from inside a five-node budget. What the family does lack is a positive
+carrier on the held-out band under `ALPHAS = {0, 1, 2, −1}`: the offset that
+keeps `c + N2 > 0` for `x0·x1 < 16` pushes the root constant to 3.
+
+Consequences for the search: a side-depth-5 cache is ×512 rows over the 21.5M
+at depth 4 and is not the way in. Either the join gets one accumulation step
+of its own (a root that reads `ln` of one side, which is what the recursive
+join scoped for √(x²+y²) provides), or `ALPHAS` gains 3 and the chain family
+is run at depth 6 for `n_vars = 3`, which is 524,288 skeletons before
+assignments. Neither was run here; this addendum records the witness and
+retires the boundary claim.
