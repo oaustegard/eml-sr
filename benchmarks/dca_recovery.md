@@ -169,7 +169,7 @@ axis. The chain family is solved; the next family is branched
 skeletons (two chains joined by an additive node covers
 x0² + x3²-shaped targets), with the same exact vectorized scoring.
 
-## Addendum 3: x·y·z is a six-node chain; the join engine's zero is a depth cap (session 2026-09-02)
+## Addendum 3: the x·y·z chain witness (2026-09-02)
 
 PR #67 reported 0 forms for `triple_product` in 2.53 billion joins of the
 [chain ≤ 4] × join × [chain ≤ 4] family and read the zero as a boundary of
