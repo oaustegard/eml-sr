@@ -679,6 +679,7 @@ def verify(witness: str, target_sym) -> bool:
 
 
 JOIN2_TARGETS = "4,5,-3,e-4,1/3,1/4,3/2,2/3,pi,sqrt2,phi,ln pi,i,1+i,e^i"
+JOIN_TARGETS = JOIN2_TARGETS + ",-6,-5,-4,-2,-1,0,1,2,3,6,7,8,e-1,e-2,e-3,1/2,ln2,1/e,e^2,e^3,-e,2e,e/2,sqrt(e),e^e,ln(e-1),-i,i*pi,-i*pi,2i"
 
 
 def _parse_count(s: str) -> int:
@@ -699,6 +700,8 @@ def main(argv=None) -> None:
     parser.add_argument("--no-join", action="store_true")
     parser.add_argument("--join2", type=int, default=8)
     parser.add_argument("--join2-budget", type=float, default=5e10)
+    parser.add_argument("--join-targets", default=JOIN_TARGETS,
+                        help="comma-separated target names for the root join (default: the issue #70 list, integers -6..8 and the PR #69 set); 'all' for every target")
     parser.add_argument("--join2-targets", default=JOIN2_TARGETS,
                         help="comma-separated target names for the two-level join (default: the issue #70 list); 'all' for every target")
     parser.add_argument("--no-selfcheck", action="store_true")
@@ -770,8 +773,14 @@ def main(argv=None) -> None:
                 join2_names = None
             else:
                 join2_names = {t.strip() for t in str(args.join2_targets).split(",") if t.strip()}
+            if str(args.join_targets) == "all":
+                join_names = None
+            else:
+                join_names = {t.strip() for t in str(args.join_targets).split(",") if t.strip()}
             for name in list(sym_targets.keys()):
                 if results[name] is not None:
+                    continue
+                if join_names is not None and name not in join_names:
                     continue
                 tc = target_complex.get(name)
                 if tc is None:
