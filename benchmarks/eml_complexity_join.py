@@ -1,4 +1,5 @@
 import numpy as np
+
 import eml_complexity as ec
 
 
@@ -26,6 +27,23 @@ def _confirm(levels, t_key, outer_inner, n_part, pos_part, form):
     return bool(ok[0]) and int(ec.qkey(v)[0]) == int(t_key)
 
 
+def _sorted_lookup_hits(keys, levels, log, err_prefix):
+    """Sort keys, look them up, and yield lookup hits.
+
+    Yields (unsorted_index, size, position) for each hit, keeping the
+    sort permutation so callers can map back to unsorted survivors.
+    """
+    order = np.argsort(keys)
+    k_sorted = keys[order]
+    try:
+        sizes, positions = levels.lookup(k_sorted)
+    except Exception as exc:
+        log(f"{err_prefix}: {exc}")
+        return
+    for j in np.nonzero(sizes >= 0)[0]:
+        yield int(order[j]), int(sizes[j]), int(positions[j])
+
+
 def root_join(
     levels: ec.Levels,
     target_value: complex,
@@ -38,30 +56,14 @@ def root_join(
 
     Minimal size na + nb + 1 over all hits is returned with its witness.
     """
-    try:
-        max_n = int(levels.N)
-    except Exception as exc:
-        log(f"root_join: unable to read levels.N: {exc}")
-        return None
-    try:
-        t_key = int(target_key)
-    except Exception as exc:
-        log(f"root_join: bad target_key: {exc}")
-        return None
+    max_n = int(levels.N)
+    t_key = int(target_key)
     if ec.CPLX:
         t_target = complex(target_value)
     else:
-        try:
-            t_target = float(target_value.real)
-        except Exception as exc:
-            log(f"root_join: bad target_value: {exc}")
-            return None
+        t_target = float(target_value.real)
     level_dtype = ec.DT
-    try:
-        chunk_int = int(chunk)
-    except Exception as exc:
-        log(f"root_join: bad chunk: {exc}")
-        return None
+    chunk_int = int(chunk)
     if chunk_int <= 0:
         log(f"root_join: non-positive chunk {chunk_int}")
         return None
@@ -95,100 +97,36 @@ def root_join(
                 continue
             idx_chunk = np.arange(start, end, dtype=np.int64)
             total_tested = total_tested + int(end - start)
-            try:
-                if ec.CPLX:
-                    with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
-                        raw = np.exp(np.exp(a_chunk.astype(np.complex128, copy=False)) - t_target)
-                    b_star = ec.snap(raw)
-                    valid = np.isfinite(b_star)
-                else:
-                    with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
-                        b_star = np.exp(np.exp(a_chunk.astype(np.float64, copy=False)) - t_target)
-                    valid = np.isfinite(b_star) & (b_star > 0)
-            except Exception as exc:
-                log(f"root_join: bstar failed at level {na} slice {start}:{end}: {exc}")
-                continue
-            try:
-                has_valid = bool(np.any(valid))
-            except Exception as exc:
-                log(f"root_join: valid check failed: {exc}")
-                continue
-            if not has_valid:
+            if ec.CPLX:
+                with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
+                    raw = np.exp(np.exp(a_chunk.astype(np.complex128, copy=False)) - t_target)
+                b_star = ec.snap(raw)
+                valid = np.isfinite(b_star)
+            else:
+                with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
+                    b_star = np.exp(np.exp(a_chunk.astype(np.float64, copy=False)) - t_target)
+                valid = np.isfinite(b_star) & (b_star > 0)
+            if not bool(np.any(valid)):
                 continue
             a_valid = a_chunk[valid]
             b_valid = b_star[valid]
             idx_valid = idx_chunk[valid]
-            try:
-                v_pred, ok = ec.eml_vec(a_valid, b_valid)
-            except Exception as exc:
-                log(f"root_join: eml_vec failed at level {na}: {exc}")
-                continue
-            try:
-                q_pred = ec.qkey(v_pred)
-            except Exception as exc:
-                log(f"root_join: qkey failed at level {na}: {exc}")
-                continue
-            try:
-                match = ok & (q_pred == t_key)
-            except Exception as exc:
-                log(f"root_join: match failed at level {na}: {exc}")
-                continue
-            try:
-                has_match = bool(np.any(match))
-            except Exception as exc:
-                log(f"root_join: match check failed: {exc}")
-                continue
-            if not has_match:
+            v_pred, ok = ec.eml_vec(a_valid, b_valid)
+            q_pred = ec.qkey(v_pred)
+            match = ok & (q_pred == t_key)
+            if not bool(np.any(match)):
                 continue
             b_surv = b_valid[match]
             a_surv = a_valid[match]
             ia_surv = idx_valid[match]
-            try:
-                k_b = ec.qkey(b_surv)
-            except Exception as exc:
-                log(f"root_join: qkey(b) failed at level {na}: {exc}")
-                continue
-            try:
-                order = np.argsort(k_b)
-            except Exception as exc:
-                log(f"root_join: sort failed at level {na}: {exc}")
-                continue
-            k_sorted = k_b[order]
-            try:
-                sizes, positions = levels.lookup(k_sorted)
-            except Exception as exc:
-                log(f"root_join: lookup failed at level {na}: {exc}")
-                continue
-            try:
-                n_hits = len(k_sorted)
-            except Exception as exc:
-                log(f"root_join: hit sizing failed: {exc}")
-                continue
-            for j in np.nonzero(sizes >= 0)[0]:
-                try:
-                    size_b = int(sizes[j])
-                except Exception as exc:
-                    log(f"root_join: bad size entry: {exc}")
-                    continue
+            k_b = ec.qkey(b_surv)
+            err_prefix = f"root_join: lookup failed at level {na}"
+            for unsorted, size_b, pos_b in _sorted_lookup_hits(k_b, levels, log, err_prefix):
                 if size_b < 0:
-                    continue
-                try:
-                    pos_b = int(positions[j])
-                except Exception as exc:
-                    log(f"root_join: bad pos entry: {exc}")
                     continue
                 if pos_b < 0:
                     continue
-                try:
-                    unsorted = int(order[j])
-                except Exception as exc:
-                    log(f"root_join: bad order entry: {exc}")
-                    continue
-                try:
-                    ia = int(ia_surv[unsorted])
-                except Exception as exc:
-                    log(f"root_join: bad ia entry: {exc}")
-                    continue
+                ia = int(ia_surv[unsorted])
                 cand_size = int(na) + size_b + 1
                 if best_size is not None and cand_size >= best_size:
                     continue
@@ -227,43 +165,19 @@ def two_level_join(
     Inner level c is restricted to 0..K, outer over 0..N, d looked up.
     Returns minimal (size, witness), None, or "skipped" over budget.
     """
-    try:
-        max_n = int(levels.N)
-    except Exception as exc:
-        log(f"two_level_join: unable to read levels.N: {exc}")
-        return None
-    try:
-        k_lim = int(K)
-    except Exception as exc:
-        log(f"two_level_join: bad K: {exc}")
-        return None
-    try:
-        t_key = int(target_key)
-    except Exception as exc:
-        log(f"two_level_join: bad target_key: {exc}")
-        return None
+    max_n = int(levels.N)
+    k_lim = int(K)
+    t_key = int(target_key)
     if ec.CPLX:
         t_target = complex(target_value)
     else:
-        try:
-            t_target = float(target_value.real)
-        except Exception as exc:
-            log(f"two_level_join: bad target_value: {exc}")
-            return None
+        t_target = float(target_value.real)
     level_dtype = ec.DT
-    try:
-        chunk_int = int(chunk)
-    except Exception as exc:
-        log(f"two_level_join: bad chunk: {exc}")
-        return None
+    chunk_int = int(chunk)
     if chunk_int <= 0:
         log(f"two_level_join: non-positive chunk {chunk_int}")
         return None
-    try:
-        budget_val = float(budget)
-    except Exception as exc:
-        log(f"two_level_join: bad budget: {exc}")
-        return None
+    budget_val = float(budget)
     if max_n < 0:
         log("two_level_join: empty levels, nothing to do")
         return None
@@ -312,11 +226,7 @@ def two_level_join(
                 log(f"two_level_join form1: cannot read outer {na}: {exc}")
                 continue
             a_idx_block = np.arange(a_start, a_end, dtype=np.int64)
-            try:
-                len_a = len(a_block)
-            except Exception as exc:
-                log(f"two_level_join form1: bad outer block: {exc}")
-                continue
+            len_a = len(a_block)
             if len_a == 0:
                 continue
             denom = len_a
@@ -346,130 +256,55 @@ def two_level_join(
                         log(f"two_level_join form1: cannot read inner {nc}: {exc}")
                         continue
                     c_idx_block = np.arange(c_start, c_end, dtype=np.int64)
-                    try:
-                        len_c = len(c_block)
-                    except Exception as exc:
-                        log(f"two_level_join form1: bad inner block: {exc}")
-                        continue
+                    len_c = len(c_block)
                     if len_c == 0:
                         continue
-                    try:
-                        a_rep = np.repeat(a_block, len_c)
-                        c_tile = np.tile(c_block, len_a)
-                        a_idx_rep = np.repeat(a_idx_block, len_c)
-                        c_idx_tile = np.tile(c_idx_block, len_a)
-                    except Exception as exc:
-                        log(f"two_level_join form1: repeat/tile failed: {exc}")
-                        continue
-                    try:
-                        if ec.CPLX:
-                            with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
-                                y_raw = np.exp(np.exp(a_rep.astype(np.complex128, copy=False)) - t_target)
-                            y_star = ec.snap(y_raw)
-                            with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
-                                d_raw = np.exp(np.exp(c_tile.astype(np.complex128, copy=False)) - y_star)
-                            d_star = ec.snap(d_raw)
-                            valid = np.isfinite(y_star) & np.isfinite(d_star)
-                        else:
-                            with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
-                                y_star = np.exp(np.exp(a_rep.astype(np.float64, copy=False)) - t_target)
-                                d_star = np.exp(np.exp(c_tile.astype(np.float64, copy=False)) - y_star)
-                            valid = np.isfinite(y_star) & np.isfinite(d_star)
-                            valid = valid & (y_star > 0) & (d_star > 0)
-                    except Exception as exc:
-                        log(f"two_level_join form1: star failed: {exc}")
-                        continue
-                    try:
-                        has_valid = bool(np.any(valid))
-                    except Exception as exc:
-                        log(f"two_level_join form1: valid check failed: {exc}")
-                        continue
-                    if not has_valid:
+                    a_rep = np.repeat(a_block, len_c)
+                    c_tile = np.tile(c_block, len_a)
+                    a_idx_rep = np.repeat(a_idx_block, len_c)
+                    c_idx_tile = np.tile(c_idx_block, len_a)
+                    if ec.CPLX:
+                        with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
+                            y_raw = np.exp(np.exp(a_rep.astype(np.complex128, copy=False)) - t_target)
+                        y_star = ec.snap(y_raw)
+                        with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
+                            d_raw = np.exp(np.exp(c_tile.astype(np.complex128, copy=False)) - y_star)
+                        d_star = ec.snap(d_raw)
+                        valid = np.isfinite(y_star) & np.isfinite(d_star)
+                    else:
+                        with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
+                            y_star = np.exp(np.exp(a_rep.astype(np.float64, copy=False)) - t_target)
+                            d_star = np.exp(np.exp(c_tile.astype(np.float64, copy=False)) - y_star)
+                        valid = np.isfinite(y_star) & np.isfinite(d_star)
+                        valid = valid & (y_star > 0) & (d_star > 0)
+                    if not bool(np.any(valid)):
                         continue
                     a_f = a_rep[valid]
                     c_f = c_tile[valid]
                     d_f = d_star[valid]
                     a_idx_f = a_idx_rep[valid]
                     c_idx_f = c_idx_tile[valid]
-                    try:
-                        y_mid, ok1 = ec.eml_vec(c_f, d_f)
-                    except Exception as exc:
-                        log(f"two_level_join form1: inner eml failed: {exc}")
-                        continue
-                    try:
-                        t_pred, ok2 = ec.eml_vec(a_f, y_mid)
-                    except Exception as exc:
-                        log(f"two_level_join form1: outer eml failed: {exc}")
-                        continue
-                    try:
-                        q_pred = ec.qkey(t_pred)
-                    except Exception as exc:
-                        log(f"two_level_join form1: qkey failed: {exc}")
-                        continue
-                    try:
-                        match = ok1 & ok2 & (q_pred == t_key)
-                    except Exception as exc:
-                        log(f"two_level_join form1: match failed: {exc}")
-                        continue
-                    try:
-                        has_match = bool(np.any(match))
-                    except Exception as exc:
-                        log(f"two_level_join form1: match check failed: {exc}")
-                        continue
-                    if not has_match:
+                    y_mid, ok1 = ec.eml_vec(c_f, d_f)
+                    t_pred, ok2 = ec.eml_vec(a_f, y_mid)
+                    q_pred = ec.qkey(t_pred)
+                    match = ok1 & ok2 & (q_pred == t_key)
+                    if not bool(np.any(match)):
                         continue
                     d_surv = d_f[match]
                     a_surv = a_f[match]
                     c_surv = c_f[match]
                     a_idx_surv = a_idx_f[match]
                     c_idx_surv = c_idx_f[match]
-                    try:
-                        k_d = ec.qkey(d_surv)
-                    except Exception as exc:
-                        log(f"two_level_join form1: qkey(d) failed: {exc}")
-                        continue
-                    try:
-                        order = np.argsort(k_d)
-                    except Exception as exc:
-                        log(f"two_level_join form1: sort failed: {exc}")
-                        continue
-                    k_sorted = k_d[order]
-                    try:
-                        sizes, positions = levels.lookup(k_sorted)
-                    except Exception as exc:
-                        log(f"two_level_join form1: lookup failed: {exc}")
-                        continue
-                    try:
-                        n_hits = len(k_sorted)
-                    except Exception as exc:
-                        log(f"two_level_join form1: hit sizing failed: {exc}")
-                        continue
-                    for j in np.nonzero(sizes >= 0)[0]:
-                        try:
-                            nd = int(sizes[j])
-                        except Exception as exc:
-                            log(f"two_level_join form1: bad size: {exc}")
-                            continue
+                    k_d = ec.qkey(d_surv)
+                    for unsorted, nd, pos_d in _sorted_lookup_hits(
+                        k_d, levels, log, "two_level_join form1: lookup failed"
+                    ):
                         if nd < 0:
-                            continue
-                        try:
-                            pos_d = int(positions[j])
-                        except Exception as exc:
-                            log(f"two_level_join form1: bad pos: {exc}")
                             continue
                         if pos_d < 0:
                             continue
-                        try:
-                            unsorted = int(order[j])
-                        except Exception as exc:
-                            log(f"two_level_join form1: bad order: {exc}")
-                            continue
-                        try:
-                            ia = int(a_idx_surv[unsorted])
-                            ic = int(c_idx_surv[unsorted])
-                        except Exception as exc:
-                            log(f"two_level_join form1: bad idx: {exc}")
-                            continue
+                        ia = int(a_idx_surv[unsorted])
+                        ic = int(c_idx_surv[unsorted])
                         cand_size = int(na) + int(nc) + nd + 2
                         if best_size is not None and cand_size >= best_size:
                             continue
@@ -510,11 +345,7 @@ def two_level_join(
                 log(f"two_level_join form2: cannot read outer {nb}: {exc}")
                 continue
             b_idx_block = np.arange(b_start, b_end, dtype=np.int64)
-            try:
-                len_b = len(b_block)
-            except Exception as exc:
-                log(f"two_level_join form2: bad outer block: {exc}")
-                continue
+            len_b = len(b_block)
             if len_b == 0:
                 continue
             denom2 = len_b
@@ -544,134 +375,59 @@ def two_level_join(
                         log(f"two_level_join form2: cannot read inner {nc}: {exc}")
                         continue
                     c_idx_block = np.arange(c_start, c_end, dtype=np.int64)
-                    try:
-                        len_c = len(c_block)
-                    except Exception as exc:
-                        log(f"two_level_join form2: bad inner block: {exc}")
-                        continue
+                    len_c = len(c_block)
                     if len_c == 0:
                         continue
-                    try:
-                        b_rep = np.repeat(b_block, len_c)
-                        c_tile = np.tile(c_block, len_b)
-                        b_idx_rep = np.repeat(b_idx_block, len_c)
-                        c_idx_tile = np.tile(c_idx_block, len_b)
-                    except Exception as exc:
-                        log(f"two_level_join form2: repeat/tile failed: {exc}")
-                        continue
-                    try:
-                        if ec.CPLX:
-                            with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
-                                ln_b = np.log(b_rep.astype(np.complex128, copy=False))
-                                w_val = t_target + ln_b
-                                y_raw = np.log(w_val)
-                            y_star = ec.snap(y_raw)
-                            with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
-                                d_raw = np.exp(np.exp(c_tile.astype(np.complex128, copy=False)) - y_star)
-                            d_star = ec.snap(d_raw)
-                            valid = np.isfinite(y_star) & np.isfinite(d_star)
-                        else:
-                            with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
-                                ln_b = np.log(b_rep.astype(np.float64, copy=False))
-                                w_val = t_target + ln_b
-                                y_star = np.log(w_val)
-                                d_star = np.exp(np.exp(c_tile.astype(np.float64, copy=False)) - y_star)
-                            valid = (b_rep > 0) & (w_val > 0)
-                            valid = valid & np.isfinite(y_star) & np.isfinite(d_star) & (d_star > 0)
-                    except Exception as exc:
-                        log(f"two_level_join form2: star failed: {exc}")
-                        continue
-                    try:
-                        has_valid = bool(np.any(valid))
-                    except Exception as exc:
-                        log(f"two_level_join form2: valid check failed: {exc}")
-                        continue
-                    if not has_valid:
+                    b_rep = np.repeat(b_block, len_c)
+                    c_tile = np.tile(c_block, len_b)
+                    b_idx_rep = np.repeat(b_idx_block, len_c)
+                    c_idx_tile = np.tile(c_idx_block, len_b)
+                    if ec.CPLX:
+                        with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
+                            ln_b = np.log(b_rep.astype(np.complex128, copy=False))
+                            w_val = t_target + ln_b
+                            y_raw = np.log(w_val)
+                        y_star = ec.snap(y_raw)
+                        with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
+                            d_raw = np.exp(np.exp(c_tile.astype(np.complex128, copy=False)) - y_star)
+                        d_star = ec.snap(d_raw)
+                        valid = np.isfinite(y_star) & np.isfinite(d_star)
+                    else:
+                        with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
+                            ln_b = np.log(b_rep.astype(np.float64, copy=False))
+                            w_val = t_target + ln_b
+                            y_star = np.log(w_val)
+                            d_star = np.exp(np.exp(c_tile.astype(np.float64, copy=False)) - y_star)
+                        valid = (b_rep > 0) & (w_val > 0)
+                        valid = valid & np.isfinite(y_star) & np.isfinite(d_star) & (d_star > 0)
+                    if not bool(np.any(valid)):
                         continue
                     b_f = b_rep[valid]
                     c_f = c_tile[valid]
                     d_f = d_star[valid]
                     b_idx_f = b_idx_rep[valid]
                     c_idx_f = c_idx_tile[valid]
-                    try:
-                        y_mid, ok1 = ec.eml_vec(c_f, d_f)
-                    except Exception as exc:
-                        log(f"two_level_join form2: inner eml failed: {exc}")
-                        continue
-                    try:
-                        t_pred, ok2 = ec.eml_vec(y_mid, b_f)
-                    except Exception as exc:
-                        log(f"two_level_join form2: outer eml failed: {exc}")
-                        continue
-                    try:
-                        q_pred = ec.qkey(t_pred)
-                    except Exception as exc:
-                        log(f"two_level_join form2: qkey failed: {exc}")
-                        continue
-                    try:
-                        match = ok1 & ok2 & (q_pred == t_key)
-                    except Exception as exc:
-                        log(f"two_level_join form2: match failed: {exc}")
-                        continue
-                    try:
-                        has_match = bool(np.any(match))
-                    except Exception as exc:
-                        log(f"two_level_join form2: match check failed: {exc}")
-                        continue
-                    if not has_match:
+                    y_mid, ok1 = ec.eml_vec(c_f, d_f)
+                    t_pred, ok2 = ec.eml_vec(y_mid, b_f)
+                    q_pred = ec.qkey(t_pred)
+                    match = ok1 & ok2 & (q_pred == t_key)
+                    if not bool(np.any(match)):
                         continue
                     d_surv = d_f[match]
                     b_surv = b_f[match]
                     c_surv = c_f[match]
                     b_idx_surv = b_idx_f[match]
                     c_idx_surv = c_idx_f[match]
-                    try:
-                        k_d = ec.qkey(d_surv)
-                    except Exception as exc:
-                        log(f"two_level_join form2: qkey(d) failed: {exc}")
-                        continue
-                    try:
-                        order = np.argsort(k_d)
-                    except Exception as exc:
-                        log(f"two_level_join form2: sort failed: {exc}")
-                        continue
-                    k_sorted = k_d[order]
-                    try:
-                        sizes, positions = levels.lookup(k_sorted)
-                    except Exception as exc:
-                        log(f"two_level_join form2: lookup failed: {exc}")
-                        continue
-                    try:
-                        n_hits = len(k_sorted)
-                    except Exception as exc:
-                        log(f"two_level_join form2: hit sizing failed: {exc}")
-                        continue
-                    for j in np.nonzero(sizes >= 0)[0]:
-                        try:
-                            nd = int(sizes[j])
-                        except Exception as exc:
-                            log(f"two_level_join form2: bad size: {exc}")
-                            continue
+                    k_d = ec.qkey(d_surv)
+                    for unsorted, nd, pos_d in _sorted_lookup_hits(
+                        k_d, levels, log, "two_level_join form2: lookup failed"
+                    ):
                         if nd < 0:
-                            continue
-                        try:
-                            pos_d = int(positions[j])
-                        except Exception as exc:
-                            log(f"two_level_join form2: bad pos: {exc}")
                             continue
                         if pos_d < 0:
                             continue
-                        try:
-                            unsorted = int(order[j])
-                        except Exception as exc:
-                            log(f"two_level_join form2: bad order: {exc}")
-                            continue
-                        try:
-                            ib = int(b_idx_surv[unsorted])
-                            ic = int(c_idx_surv[unsorted])
-                        except Exception as exc:
-                            log(f"two_level_join form2: bad idx: {exc}")
-                            continue
+                        ib = int(b_idx_surv[unsorted])
+                        ic = int(c_idx_surv[unsorted])
                         cand_size = int(nb) + int(nc) + nd + 2
                         if best_size is not None and cand_size >= best_size:
                             continue
