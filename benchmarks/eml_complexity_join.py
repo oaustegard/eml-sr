@@ -51,10 +51,13 @@ def root_join(
     *,
     chunk: int = 2_000_000,
     log=print,
+    verify=None,
 ) -> tuple[int, str] | None:
     """Search t as eml(a, b) with a enumerated and b looked up.
 
     Minimal size na + nb + 1 over all hits is returned with its witness.
+    `verify(witness) -> bool`, when given, must accept a hit before it can
+    become the best; the 11-digit key match alone admits coincidences.
     """
     max_n = int(levels.N)
     t_key = int(target_key)
@@ -70,6 +73,7 @@ def root_join(
     best_size = None
     best_witness = None
     total_tested = 0
+    rejected = 0
     if max_n < 0:
         log(f"root_join: tested {total_tested} candidates, best size None")
         return None
@@ -142,9 +146,13 @@ def root_join(
                 except Exception as exc:
                     log(f"root_join: witness right failed: {exc}")
                     continue
+                witness = f"e({left_w},{right_w})"
+                if verify is not None and not verify(witness):
+                    rejected = rejected + 1
+                    continue
                 best_size = cand_size
-                best_witness = f"e({left_w},{right_w})"
-    log(f"root_join: tested {total_tested} candidates, best size {best_size}")
+                best_witness = witness
+    log(f"root_join: tested {total_tested} candidates, {rejected} key hits rejected by exact check, best size {best_size}")
     if best_size is None:
         return None
     return (best_size, best_witness)
@@ -159,6 +167,7 @@ def two_level_join(
     budget: float,
     chunk: int = 500_000,
     log=print,
+    verify=None,
 ) -> tuple[int, str] | None | str:
     """Search t as eml(a, eml(c, d)) and eml(eml(c, d), b).
 
@@ -202,6 +211,7 @@ def two_level_join(
     if float(planned) > budget_val:
         log(f"two_level_join: skipped, planned {planned} exceeds budget {budget_val}")
         return "skipped"
+    rejected = 0
     best_size = None
     best_witness = None
     pair_limit = chunk_int
@@ -325,8 +335,12 @@ def two_level_join(
                         except Exception as exc:
                             log(f"two_level_join form1: witness d failed: {exc}")
                             continue
+                        witness = f"e({w_a},e({w_c},{w_d}))"
+                        if verify is not None and not verify(witness):
+                            rejected = rejected + 1
+                            continue
                         best_size = cand_size
-                        best_witness = f"e({w_a},e({w_c},{w_d}))"
+                        best_witness = witness
     for nb in range(max_n + 1):
         try:
             m_b = len(levels.vals[nb])
@@ -448,9 +462,13 @@ def two_level_join(
                         except Exception as exc:
                             log(f"two_level_join form2: witness d failed: {exc}")
                             continue
+                        witness = f"e(e({w_c},{w_d}),{w_b})"
+                        if verify is not None and not verify(witness):
+                            rejected = rejected + 1
+                            continue
                         best_size = cand_size
-                        best_witness = f"e(e({w_c},{w_d}),{w_b})"
-    log(f"two_level_join: planned {planned} pairs, best size {best_size}")
+                        best_witness = witness
+    log(f"two_level_join: planned {planned} pairs, {rejected} key hits rejected by exact check, best size {best_size}")
     if best_size is None:
         return None
     return (best_size, best_witness)
