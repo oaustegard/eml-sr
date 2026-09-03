@@ -607,6 +607,65 @@ def mult_shaped(witness: str) -> bool | None:
         return None
 
 
+def parse_witness(witness: str):
+    """Parse "e(<l>,<r>)" / "1" into nested tuples; None if the string is malformed."""
+    s = str(witness)
+
+    def parse_at(pos):
+        if pos < len(s) and s[pos] == "1":
+            return None, pos + 1
+        if s[pos:pos + 2] != "e(":
+            raise ValueError("unexpected token")
+        left, p1 = parse_at(pos + 2)
+        if s[p1] != ",":
+            raise ValueError("expected comma")
+        right, p2 = parse_at(p1 + 1)
+        if s[p2] != ")":
+            raise ValueError("expected close")
+        return (left, right), p2 + 1
+
+    try:
+        tree, end = parse_at(0)
+    except (ValueError, IndexError):
+        return None
+    if end != len(s):
+        return None
+    return tree
+
+
+def exact_verifier(target_sym, dps: int = 40, tol: float = 1e-25):
+    """Return a callable witness -> bool that evaluates the tree at `dps` digits with mpmath.
+
+    The 11-digit keys that make enumeration tractable also make coincidences
+    common once a join tests 1e8 candidates against 1e8 classes: on the real
+    size-19 cache, every root-join hit above size 23 was such a coincidence.
+    A tree is accepted only if it matches the target to `tol` at `dps` digits.
+    """
+    import mpmath as mp
+    mp.mp.dps = dps
+    tv = sp.N(target_sym, dps)
+    target = mp.mpc(str(sp.re(tv)), str(sp.im(tv)))
+    scale = max(1.0, float(abs(target)))
+
+    def ev(node):
+        if node is None:
+            return mp.mpc(1)
+        left, right = node
+        return mp.exp(ev(left)) - mp.log(ev(right))
+
+    def check(witness: str) -> bool:
+        tree = parse_witness(witness)
+        if tree is None and witness != "1":
+            return False
+        try:
+            val = ev(tree)
+        except (ValueError, ZeroDivisionError, OverflowError):
+            return False
+        return bool(abs(val - target) < tol * scale)
+
+    return check
+
+
 def verify(witness: str, target_sym) -> bool:
     """Build the witness with sympy and check it against the target."""
     try:
@@ -728,8 +787,9 @@ def main(argv=None) -> None:
                 except Exception as ex:
                     print(f"key computation failed for {name}: {ex}")
                     continue
+                check = exact_verifier(sym_targets[name])
                 try:
-                    rj = root_join(levels, complex(tc), int(tkey), log=print)
+                    rj = root_join(levels, complex(tc), int(tkey), log=print, verify=check)
                 except Exception as ex:
                     print(f"root join failed for {name}: {ex}")
                     rj = None
@@ -740,7 +800,7 @@ def main(argv=None) -> None:
                 if join2_names is not None and name not in join2_names:
                     continue
                 try:
-                    r2 = two_level_join(levels, complex(tc), int(tkey), K=int(args.join2), budget=float(args.join2_budget), log=print)
+                    r2 = two_level_join(levels, complex(tc), int(tkey), K=int(args.join2), budget=float(args.join2_budget), log=print, verify=check)
                 except Exception as ex:
                     print(f"two level join failed for {name}: {ex}")
                     r2 = None
