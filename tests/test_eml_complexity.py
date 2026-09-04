@@ -104,3 +104,27 @@ def test_mult_flag_on_product_tree():
     assert ec.mult_shaped("e(1,e(e(1,1),1))") is False        # 0
     prod = "e(e(1,e(e(1,e(e(1,1),1)),1)),1)"                    # exp(ln(e^e)) = e^e: exp of a log, no product
     assert ec.mult_shaped(prod) in (False, None)
+
+
+def test_cli_join_runs_on_the_complex_branch(tmp_path):
+    # As a script the engine is __main__; the join module must see the same
+    # module (branch globals included), or complex lookups silently miss.
+    import json
+    import subprocess
+    script = os.path.join(BENCH, "eml_complexity.py")
+    out = tmp_path / "out"
+    subprocess.run([sys.executable, script, "complex", "6", "--spill", "none",
+                    "--out", str(out), "--join2", "0", "--no-selfcheck"],
+                   check=True, capture_output=True, text=True, timeout=600)
+    d = json.load(open(out / "complex_6.json"))
+    hit = d["targets"]["-1"]
+    assert hit is not None and hit["source"] == "join" and hit["size"] == 8 and hit["verified"]
+
+
+def test_resume_stops_at_requested_size(tmp_path):
+    spill = str(tmp_path / "spill")
+    ec.set_branch("real")
+    ec.expand("real", 6, spill_dir=spill, chunk=2_000_000, ram_gb=4, resume=False, log=lambda *a, **k: None)
+    levels, info = ec.expand("real", 4, spill_dir=spill, chunk=2_000_000, ram_gb=4, resume=True, log=lambda *a, **k: None)
+    assert levels.N == 4
+    assert info["counts"] == REAL_COUNTS[:5]

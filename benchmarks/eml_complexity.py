@@ -222,7 +222,7 @@ def expand(branch: str, nmax: int, *, spill_dir: str | None, chunk: int, ram_gb:
         # so no par file is written for size 0; resume treats that as expected.
         try:
             n_try = 0
-            while True:
+            while n_try <= nmax:
                 vals_path = os.path.join(spill_dir, f"{branch}_vals_{n_try}.npy")
                 par_path = os.path.join(spill_dir, f"{branch}_par_{n_try}.npy")
                 if not os.path.exists(vals_path):
@@ -698,7 +698,8 @@ def main(argv=None) -> None:
     parser.add_argument("--chunk", type=_parse_count, default=20000000)
     parser.add_argument("--ram-gb", type=float, default=12.0)
     parser.add_argument("--no-join", action="store_true")
-    parser.add_argument("--join2", type=int, default=8)
+    parser.add_argument("--join2", type=int, default=8,
+                        help="largest size of the inner operand c in the two-level join; 0 restricts c to the leaf 1")
     parser.add_argument("--join2-budget", type=float, default=5e10)
     parser.add_argument("--join-targets", default=JOIN_TARGETS,
                         help="comma-separated target names for the root join (default: the issue #70 list, integers -6..8 and the PR #69 set); 'all' for every target")
@@ -761,6 +762,12 @@ def main(argv=None) -> None:
             here = None
         if here is not None and here not in sys.path:
             sys.path.insert(0, here)
+        # Running as a script makes this module __main__; the join module's
+        # `import eml_complexity` would otherwise load a second copy whose
+        # branch globals are still the real-branch defaults, and on the
+        # complex branch every lookup then misses (complex 18, 2026-09-04).
+        if __name__ == "__main__":
+            sys.modules.setdefault("eml_complexity", sys.modules[__name__])
         try:
             from eml_complexity_join import root_join
             from eml_complexity_join import two_level_join
