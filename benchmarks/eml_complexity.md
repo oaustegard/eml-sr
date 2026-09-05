@@ -103,6 +103,50 @@ The root join solves `b* = exp(exp(a) - t)` for every cached `a` (328M on real 2
 
 The two-level join (`t = eml(a, eml(c, d))` and `t = eml(eml(c, d), b)`, inner operand at size <= 4) costs 1.2e10 pair evaluations per target on the size-20 cache and rejected 850k and 1.2M coincidences on its first two targets over about ten hours without a verified find. It is left in the script with `--join2 K`; the table used `K=0` (inner operand the leaf `1`), which costs 1.9e8 pairs per target on complex 18 and found nothing there either.
 
+## The compiler against the minima
+
+`benchmarks/compiler_vs_minimal.py` compiles a few natural elementary expressions for each constant with `eml_compiler` in strict mode (leaves are the constant `1` only), verifies each tree numerically, and keeps the smallest. "inf steps" counts subtrees whose float64 value is infinite: the compiler's strict negation is `sub(ln(1), x)`, which goes through `ln(0) = -inf` and `exp(-inf) = 0`, and its addition is `a - (-b)`, so every `+` and every unary minus takes that route. The enumeration rejects non-finite intermediates, so the two columns measure two grammars: finite-valued closed trees for the minima, IEEE-754 closed trees for the compiler.
+
+| constant | minimal real | minimal complex | compiler (strict) | best expression | ratio | inf steps |
+|---|---|---|---|---|---|---|
+| `0` | 3 | 3 | 3 | `ln(1)` | 1.0 | 0 |
+| `e` | 1 | 1 | 1 | `e` | 1.0 | 0 |
+| `e-1` | 2 | 2 | 6 | `e-1` | 3.0 | 0 |
+| `e^e` | 2 | 2 | 2 | `exp(e)` | 1.0 | 0 |
+| `ln(e-1)` | 5 | 5 | 9 | `ln(e-1)` | 1.8 | 0 |
+| `e-2` | 7 | 7 | 11 | `e-1-1` | 1.6 | 0 |
+| `-1` | 8 | 8 | 8 | `-1` | 1.0 | 3 |
+| `2` | 9 | 9 | 13 | `1+1` | 1.4 | 3 |
+| `1/e` | 9 | 9 | 9 | `exp(-1)` | 1.0 | 3 |
+| `e^2` | 10 | 10 | 14 | `exp(1+1)` | 1.4 | 3 |
+| `-e` | 11 | 11 | 9 | `-e` | 0.8 | 3 |
+| `e-3` | 12 | 12 | 16 | `e-1-1-1` | 1.3 | 0 |
+| `ln2` | 12 | 12 | 16 | `ln(1+1)` | 1.3 | 3 |
+| `-2` | 13 | 13 | 13 | `-1-1` | 1.0 | 3 |
+| `2e` | 13 | 13 | 15 | `e+e` | 1.2 | 3 |
+| `3` | 14 | 14 | 26 | `1+1+1` | 1.9 | 6 |
+| `e/2` | 14 | 14 | 22 | `exp(1-ln(1+1))` | 1.6 | 3 |
+| `e^3` | 15 | 15 | 27 | `exp(1+1+1)` | 1.8 | 6 |
+| `1/2` | 17 | 15 | 25 | `exp(-ln(1+1))` | 1.5 | 6 |
+| `sqrt(e)` | 18 | 16 | 46 | `exp(1/(1+1))` | 2.6 | 12 |
+| `2/3` | 19 | <=37 | 71 | `(1+1)/(1+1+1)` | 3.7 | 15 |
+| `-3` | 20 | 17 | 18 | `-1-1-1` | 0.9 | 3 |
+| `e-4` | 21 | 17 | 21 | `e-1-1-1-1` | 1.0 | 0 |
+| `4` | 21 | 19 | 39 | `1+1+1+1` | 1.9 | 9 |
+| `3/2` | <=23 | <=20 | 58 | `1+1/(1+1)` |  | 15 |
+| `1/3` | <=24 | <=36 | 58 | `1/(1+1+1)` |  | 15 |
+| `-4` | <=27 | <=26 | 47 | `-(1+1+1+1)` |  | 12 |
+| `5` | <=32 | <=31 | 52 | `1+1+1+1+1` |  | 12 |
+| `-5` | <=34 | <=31 | 60 | `-(1+1+1+1+1)` |  | 15 |
+| `6` | <=39 | <=36 | 59 | `(1+1+1)*(1+1)` |  | 12 |
+| `i*pi` | n/a | <=23 | 11 | `ln(-1)` |  | 3 |
+| `-i*pi` | n/a | 11 | 19 | `-ln(-1)` | 1.7 | 6 |
+
+- **The compiler overpays by 1.3x to 3.7x on everything it builds by arithmetic.** `e-1` costs 6 against 2 because generic subtraction is `eml(ln a, exp b)` and never notices that `e - ln(e)` is already the answer. `2` costs 13 against 9, `3` 26 against 14, `4` 39 against 21, `2/3` 71 against 19, `sqrt(e)` 46 against 18. The ratio grows with the number of arithmetic operators in the expression, because each `+`, `*`, `/` and `^` is expanded to its Table 4 identity without any sharing or simplification.
+- **Exact hits: `0`, `e`, `e^e`, `1/e`, `-1`, `-2`, `e-4`.** Where the expression maps onto one identity (`ln(1)`, `exp(e)`, `exp(-1)`) the compiler is minimal.
+- **With infinities allowed, the negative constants are cheaper than the finite minima.** `-e` compiles to 9 nodes against the finite minimum 11, `-3` to 18 against 20. Both pass a 40-digit mpmath check (mpmath handles `log(0) = -inf`) and fail sympy (`zoo`). The finite minima for negatives are therefore minima of the finite grammar only; the paper's grammar, which relies on the IEEE route (see `CLAUDE.md`, invariant 6), has smaller trees for them. Every `+` in the compiler also passes through `-inf`, so under the finite grammar the compiler could not express addition at all without a literal `0`.
+- **`ln(-1)` has a roundoff-determined sign.** The 11-node compiled tree for `ln(-1)` evaluates to `+i*pi` in float64 and in mpmath at 40 digits, because `exp(e - i*pi)` lands a rounding error below the negative real axis. Under the enumeration's canonicalisation (near-real values snapped to the axis, `ln(-x) = ln x + i*pi`) the same tree evaluates to `-i*pi`, which is the exact principal-branch value on the cut. The enumeration's `-i*pi` at 11 is a different tree. So `i*pi` is 11 or 23 depending on the convention, and any consumer of the compiler's `ln(-1)` should not rely on its sign.
+
 ## Resources
 
 | run | frontier | level time | peak RSS | wall | notes |
