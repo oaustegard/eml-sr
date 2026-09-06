@@ -456,7 +456,7 @@ def _union_ratio(keyers: list, sample: np.ndarray, n_query: int,
 
 
 def simulate_probe_load(values: np.ndarray, y_scr: np.ndarray, keyers: list,
-                        cache_sample: int = 50000, u_sample: int = 48,
+                        cache_sample: int = 0, u_sample: int = 4096,
                         seed: int = 0) -> dict:
     """Probe-side candidate load, measured rather than modelled.
 
@@ -470,46 +470,69 @@ def simulate_probe_load(values: np.ndarray, y_scr: np.ndarray, keyers: list,
         hits_full ~= hits_sample * (N / m_cache) * (P / m_probe)
 
     That is exact in expectation and assumes nothing about independence
-    across tables.
+    across tables. It is not low-variance, and the shortfall is not
+    small: 95% of the colliding pairs sit in cells over 1000 entries, and
+    at u_sample=4096 against the whole cache this estimator saw 30 hits
+    where the measured single-table run implies ~68,000. The candidate
+    load is carried by a rare set of U rows whose required V lands in a
+    degenerate cell, not spread across probes, so a uniform probe sample
+    misses it almost entirely. Budget U rows in the 1e5 range, or pass
+    `u_sample=0` for every row (exact, and about as expensive as running
+    the join without the confirm stage).
+
+    Subsampling the CACHE multiplies the same variance by (N/m) on top,
+    so `cache_sample=0` (the default) indexes the whole cache and takes
+    the variance only on the probe side, where more U rows buy it down
+    directly.
     """
     rng = np.random.default_rng(seed)
     n = values.shape[0]
-    m = min(cache_sample, n)
-    S = np.ascontiguousarray(values[rng.choice(n, size=m, replace=False)])
+    m = n if cache_sample <= 0 else min(cache_sample, n)
+    S = (values if m == n else
+         np.ascontiguousarray(values[rng.choice(n, size=m, replace=False)]))
+    t_build = time.time()
     tables, stats = _build_tables(S, [k.keys for k in keyers])
+    t_build = round(time.time() - t_build, 1)
 
-    nu = min(u_sample, n)
-    U = np.ascontiguousarray(values[rng.choice(n, size=nu, replace=False)])
+    nu = n if u_sample <= 0 else min(u_sample, n)
+    U = (values if nu == n else
+         np.ascontiguousarray(values[rng.choice(n, size=nu, replace=False)]))
     probes = union = raw = 0
     finite_probes = 0
-    for a_u in ALPHAS:
-        for g_u in GAMMAS:
-            with np.errstate(all="ignore"):
-                P = np.exp(a_u + g_u * U)
-                v_in_req = np.exp(P - y_scr[None, :])
-            for a_v in ALPHAS:
-                for g_v in GAMMAS:
-                    probes += nu
-                    with np.errstate(all="ignore"):
-                        V_req = (v_in_req - a_v) / g_v
-                    idx = np.nonzero(np.isfinite(V_req).all(axis=1))[0]
-                    if idx.size == 0:
-                        continue
-                    finite_probes += int(idx.size)
-                    key_cols = [kf.keys(V_req[idx]) for kf in keyers]
-                    for r in range(idx.size):
-                        cand, rh = probe_tables(tables, key_cols, r)
-                        union += len(cand)
-                        raw += rh
+    CHUNK = 65536
+    for start in range(0, nu, CHUNK):
+        Uc = U[start:start + CHUNK]
+        for a_u in ALPHAS:
+            for g_u in GAMMAS:
+                with np.errstate(all="ignore"):
+                    P = np.exp(a_u + g_u * Uc)
+                    v_in_req = np.exp(P - y_scr[None, :])
+                for a_v in ALPHAS:
+                    for g_v in GAMMAS:
+                        probes += Uc.shape[0]
+                        with np.errstate(all="ignore"):
+                            V_req = (v_in_req - a_v) / g_v
+                        idx = np.nonzero(np.isfinite(V_req).all(axis=1))[0]
+                        if idx.size == 0:
+                            continue
+                        finite_probes += int(idx.size)
+                        key_cols = [kf.keys(V_req[idx]) for kf in keyers]
+                        for r in range(idx.size):
+                            cand, rh = probe_tables(tables, key_cols, r)
+                            union += len(cand)
+                            raw += rh
     # the full run probes every cache row against every cache row, so the
     # sample covers m/n of the table and nu/n of the probes
     scale = (n / m) * (n / max(nu, 1))
-    return dict(n_tables=len(keyers), cache_sample=m, u_sample=nu,
+    return dict(n_tables=len(keyers), cache_sample=m, cache_full=(m == n),
+                u_sample=nu, scale=round(scale, 2), build_s=t_build,
                 probes=probes, finite_probes=finite_probes,
                 sample_union_hits=union, sample_raw_hits=raw,
+                hits_per_finite_probe=round(union / max(finite_probes, 1), 4),
                 union_over_raw=round(union / max(raw, 1), 4),
                 pred_hits=int(round(union * scale)),
                 pred_raw_hits=int(round(raw * scale)),
+                key_bytes=stats["key_bytes"],
                 max_bucket=stats["max_bucket"],
                 pair_mass=pair_mass_by_bucket_size(
                     [b for t in tables for b in map(len, t.values())]))
@@ -518,9 +541,7 @@ def simulate_probe_load(values: np.ndarray, y_scr: np.ndarray, keyers: list,
 def plan_or_amplification(values: np.ndarray, bands, resolutions, table_counts,
                           sample: int = 50000, n_query: int = 2000,
                           seed: int = 0, baseline_hits: int | None = None,
-                          baseline_p: float | None = None,
-                          y_scr: np.ndarray | None = None,
-                          probe_u: int = 0) -> dict:
+                          baseline_p: float | None = None) -> dict:
     """Measure the collision load of each (band, resolution) cell on a
     sample of the side cache, then project it to O tables.
 
@@ -537,12 +558,12 @@ def plan_or_amplification(values: np.ndarray, bands, resolutions, table_counts,
     coordinate mismatch of every discovery as `key_mismatch`; divide
     that by a candidate resolution to get s and read the row.
 
-    Two load estimates are reported. The calibrated one scales a measured
-    single-table baseline by the union rate, which assumes the probe keys
-    are distributed like the cache rows -- they are not, since a probe is
-    exp(exp(a + g*U) - y). When `y_scr` is given and `probe_u` > 0,
-    `simulate_probe_load` measures the probe-side load directly instead
-    and that number supersedes the calibrated one.
+    The reported load is calibrated: it scales a measured single-table
+    baseline by the union rate, which assumes the probe keys are
+    distributed like the cache rows. They are not -- a probe is
+    exp(exp(a + g*U) - y), far heavier-tailed than the cache -- so read
+    the grid to SHORTLIST cells, then measure the shortlist with
+    `--mode probe`, which runs real probes and assumes neither.
     """
     rng = np.random.default_rng(seed)
     n, d = values.shape
@@ -586,10 +607,6 @@ def plan_or_amplification(values: np.ndarray, bands, resolutions, table_counts,
                         baseline_hits * p_union_model / baseline_p)
                     ent["pred_hits_calibrated"] = int(
                         baseline_hits * p_union_meas / baseline_p)
-                if y_scr is not None and probe_u:
-                    ent["probe"] = simulate_probe_load(
-                        values, y_scr, keyers, cache_sample=m,
-                        u_sample=probe_u, seed=seed)
                 row["tables"][str(O)] = ent
             cells.append(row)
     return dict(n_cache=int(n), d=int(d), sample=int(m),
@@ -645,10 +662,14 @@ def main() -> int:
     ap.add_argument("--target", default="sum_of_squares",
                     choices=sorted(TARGETS))
     ap.add_argument("--max-side-depth", type=int, default=3)
-    ap.add_argument("--mode", default="ab", choices=("ab", "or", "size"),
+    ap.add_argument("--mode", default="ab",
+                    choices=("ab", "or", "size", "probe"),
                     help="ab: the issue-#62 single-table key A/B. "
                          "or: single-table baseline + OR-amplified arms. "
-                         "size: measure collision load only, run no join.")
+                         "size: sweep the (band, resolution) grid on a "
+                         "cache sample, run no join. "
+                         "probe: measure the real probe-side load of each "
+                         "--or-config against the whole cache.")
     ap.add_argument("--bits", type=int, nargs="+", default=[4, 2])
     ap.add_argument("--or-config", type=_parse_or_config, nargs="+",
                     default=[(16, 0.002, 4)], metavar="BAND,RES,TABLES",
@@ -663,12 +684,14 @@ def main() -> int:
     ap.add_argument("--size-tables", type=int, nargs="+", default=[1, 2, 4, 8])
     ap.add_argument("--size-sample", type=int, default=50000)
     ap.add_argument("--size-queries", type=int, default=2000)
-    ap.add_argument("--probe-u", type=int, default=32,
-                    help="cache rows to run as real probes through each "
-                         "sized configuration. 0 skips the probe "
-                         "simulation and leaves only the calibrated "
-                         "estimate, which assumes probe keys look like "
-                         "cache keys.")
+    ap.add_argument("--probe-u", type=int, default=131072,
+                    help="cache rows run as real probes in --mode probe; "
+                         "0 runs every row (exact). Each contributes 256 "
+                         "affine probes. The load is carried by a rare set "
+                         "of U rows landing in degenerate cells, so a small "
+                         "sample under-reports by orders of magnitude -- "
+                         "4096 rows saw 30 hits where the measured run "
+                         "implies 68,000.")
     ap.add_argument("--baseline-hits", type=int, default=16402595,
                     help="measured single-table arcsinh-int16 hash hits, "
                          "used to calibrate predicted load.")
@@ -680,6 +703,7 @@ def main() -> int:
         "ab": "benchmarks/results/skeleton_enum/remex_join_ab.json",
         "or": "benchmarks/results/skeleton_enum/remex_join_or.json",
         "size": "benchmarks/results/skeleton_enum/remex_join_or_sizing.json",
+        "probe": "benchmarks/results/skeleton_enum/remex_join_or_probe.json",
     }
     out = Path(args.out or default_out[args.mode])
 
@@ -692,7 +716,7 @@ def main() -> int:
             values, args.size_bands, args.size_res, args.size_tables,
             sample=args.size_sample, n_query=args.size_queries,
             seed=args.seed, baseline_hits=args.baseline_hits,
-            baseline_p=p_base, y_scr=y_scr, probe_u=args.probe_u)
+            baseline_p=p_base)
         plan.update(target=args.target, max_side_depth=args.max_side_depth,
                     wall_s=round(time.time() - t0, 1))
         for cell in plan["cells"]:
@@ -703,11 +727,36 @@ def main() -> int:
                       f"union/sum={ent['union_over_sum']:.3f} "
                       f"clip={cell['clip_fraction']:.3f} "
                       f"mass>100={cell['pair_mass']['>100']:.3f} "
-                      f"probe_hits={ent.get('probe', {}).get('pred_hits', '-')}"
-                      f" calib={ent.get('pred_hits_calibrated', '-')}",
+                      f"calib_hits={ent.get('pred_hits_calibrated', '-')}",
                       flush=True)
         out.parent.mkdir(parents=True, exist_ok=True)
         json.dump(plan, open(out, "w"), indent=1)
+        print(f"# DONE -> {out}")
+        return 0
+
+    if args.mode == "probe":
+        d = values.shape[1]
+        rows = []
+        base = simulate_probe_load(values, y_scr,
+                                   [BandedScalarKeyer(d, 0.01, d, seed=None)],
+                                   u_sample=args.probe_u, seed=args.seed)
+        base["label"] = "arcsinh-int16-equivalent"
+        rows.append(base)
+        print(json.dumps(base), flush=True)
+        for band, res, n_tables in args.or_config:
+            out_row = simulate_probe_load(
+                values, y_scr, or_table_set(d, res, band, n_tables,
+                                            seed0=args.seed),
+                u_sample=args.probe_u, seed=args.seed)
+            out_row["label"] = f"or-band{min(band, d)}@{res:g}x{n_tables}"
+            rows.append(out_row)
+            print(json.dumps(out_row), flush=True)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        json.dump(dict(target=args.target,
+                       max_side_depth=args.max_side_depth,
+                       cache_entries=len(entries),
+                       baseline_hits=args.baseline_hits, results=rows),
+                  open(out, "w"), indent=1)
         print(f"# DONE -> {out}")
         return 0
 
