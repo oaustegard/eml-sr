@@ -26,11 +26,25 @@ probability is s collides somewhere with probability
     1 - (1 - s**A)**O
 
 so A and O move recall and bucket size on separate axes, where a single
-table can only trade one against the other through key resolution. The
-measured single-table A/B is in results/skeleton_enum/remex_join_ab.json:
-coarsening from exact-f64 to arcsinh-int16 bought 14x recall (32 -> 473
-discoveries) and cost 67,000x candidate load (244 -> 16.4M hash hits),
-with the largest bucket going from 1 to 5,568.
+table can only trade one against the other through key resolution.
+
+THE 16.4M-HIT LOAD THE ISSUE SIZES AGAINST IS AN int16 CLIP ARTIFACT.
+`ScalarKeyer` clips rint(arcsinh(v)/0.01) to +/-32000, which saturates
+at |v| ~ 4.7e138. Cache values almost never reach that (0.03% of
+coordinates), but a probe is exp(exp(a_u + g_u*U) - y_scr) and reaches
+the top of float64 routinely, so probes past the rail all pin to the
+same code and meet in one cell no matter how far apart they are.
+Measured with `--mode probe` on the same 985,467-entry cache:
+
+    int16 ScalarKeyer, res 0.01            16,405,493 predicted hits
+    int32, byte-identical cache partition        9,112 predicted hits
+
+The int16 figure lands within 0.02% of the 16,402,595 the A/B measured,
+from 3.3% of the U rows, so the estimator is validated and the artifact
+is isolated: same cells, same max bucket (5,568), same cache-side pair
+mass. 99.94% of the measured load was the clip. `BandedScalarKeyer`
+therefore uses int32 codes; `clip_fraction` reports the margin. The
+issue's "67,000x candidate load" for coarsening does not survive it.
 
 `run_join` takes a list of keyers, probes every table, and unions the
 candidate indices before the 16-sample screen, so each pair reaches
@@ -56,12 +70,16 @@ you skip it:
     so a pair's per-coordinate mismatches are strongly correlated. The
     AND is therefore less selective than `s**A` says, and the recall
     column should be read as a bound, not a prediction.
-  * `BandedScalarKeyer` codes are int32, not int16. The clip sets where
-    arcsinh(v)/res saturates, and at int16 a resolution fine enough to
-    break up the big buckets (res=0.001) collapses everything past
-    |v| ~ 4e13 into one cell -- while the probe side is
-    exp(exp(a + g*U) - y), which is routinely that large. A finer key
-    would be coarser in exactly the tail that builds the big buckets.
+  * the cache-side collision rate is the wrong population for load. It
+    says 95% of colliding PAIRS sit in cells over 1000 entries; the
+    probes never visit those cells, because exp(exp(a + g*U) - y) does
+    not reach the near-zero and near-constant families that build them.
+    `simulate_probe_load` reports `probe_hit_mass` alongside
+    `cache_pair_mass` for that reason -- read the first one for load and
+    the second one for cache structure.
+  * a small probe sample under-reports by orders of magnitude, because
+    once the clip is gone the hits come from a rare set of U rows. 4096
+    U rows saw 30 hits where the measured run implies ~68,000.
 """
 
 from __future__ import annotations
@@ -181,6 +199,7 @@ def collide_prob(s: float, band: int, n_tables: int) -> float:
 
 INT16_LIMIT = 32000
 INT32_LIMIT = 2_000_000_000
+HIT_MASS_BINS = (1, 10, 100, 1000)
 
 
 def clip_fraction(V: np.ndarray, resolution: float,
@@ -226,22 +245,15 @@ class RemexKeyer:
                 for i in range(V.shape[0])]
 
 
-def _build_tables(values: np.ndarray, keyers: list, bucket_cap: int = 0):
+def _build_tables(values: np.ndarray, keyers: list):
     """One bucket dict per keyer. Returns (tables, stats)."""
     tables = []
     per_table = []
     key_bytes = 0
-    capped_cells = capped_entries = 0
     for kf in keyers:
         buckets = defaultdict(list)
         for i, k in enumerate(kf(values)):
             buckets[k].append(i)
-        if bucket_cap:
-            over = [k for k, v in buckets.items() if len(v) > bucket_cap]
-            capped_cells += len(over)
-            for k in over:
-                capped_entries += len(buckets[k])
-                del buckets[k]
         bs = np.array([len(v) for v in buckets.values()])
         key_bytes += sum(len(k) for k in buckets)
         per_table.append(dict(n_buckets=len(buckets),
@@ -254,10 +266,6 @@ def _build_tables(values: np.ndarray, keyers: list, bucket_cap: int = 0):
                  max_bucket=max((t["max_bucket"] for t in per_table),
                                 default=0),
                  per_table=per_table)
-    if bucket_cap:
-        stats["bucket_cap"] = bucket_cap
-        stats["capped_cells"] = capped_cells
-        stats["capped_entries"] = capped_entries
     return tables, stats
 
 
@@ -283,7 +291,7 @@ def probe_tables(tables: list, key_cols: list, r: int) -> tuple:
 
 
 def run_join(entries, values, keyers, y_scr, X_train, y_train,
-             X_held, y_held, label: str, bucket_cap: int = 0):
+             X_held, y_held, label: str):
     """Meet-in-the-middle join over one or more hash tables.
 
     `keyers` is a single keyer callable or a list of them. With a list,
@@ -296,7 +304,7 @@ def run_join(entries, values, keyers, y_scr, X_train, y_train,
     if callable(keyers):
         keyers = [keyers]
     t0 = time.time()
-    tables, stats = _build_tables(values, keyers, bucket_cap)
+    tables, stats = _build_tables(values, keyers)
 
     hits = raw_hits = tested = 0
     discoveries = []
@@ -499,6 +507,7 @@ def simulate_probe_load(values: np.ndarray, y_scr: np.ndarray, keyers: list,
          np.ascontiguousarray(values[rng.choice(n, size=nu, replace=False)]))
     probes = union = raw = 0
     finite_probes = 0
+    raw_over = [0] * len(HIT_MASS_BINS)
     CHUNK = 65536
     for start in range(0, nu, CHUNK):
         Uc = U[start:start + CHUNK]
@@ -518,9 +527,18 @@ def simulate_probe_load(values: np.ndarray, y_scr: np.ndarray, keyers: list,
                         finite_probes += int(idx.size)
                         key_cols = [kf.keys(V_req[idx]) for kf in keyers]
                         for r in range(idx.size):
-                            cand, rh = probe_tables(tables, key_cols, r)
-                            union += len(cand)
-                            raw += rh
+                            u = set()
+                            for tb, kl in zip(tables, key_cols):
+                                c = tb.get(kl[r])
+                                if not c:
+                                    continue
+                                b = len(c)
+                                raw += b
+                                for ti, thr in enumerate(HIT_MASS_BINS):
+                                    if b > thr:
+                                        raw_over[ti] += b
+                                u.update(c)
+                            union += len(u)
     # the full run probes every cache row against every cache row, so the
     # sample covers m/n of the table and nu/n of the probes
     scale = (n / m) * (n / max(nu, 1))
@@ -534,7 +552,16 @@ def simulate_probe_load(values: np.ndarray, y_scr: np.ndarray, keyers: list,
                 pred_raw_hits=int(round(raw * scale)),
                 key_bytes=stats["key_bytes"],
                 max_bucket=stats["max_bucket"],
-                pair_mass=pair_mass_by_bucket_size(
+                # what the load is actually made of, on the population that
+                # generates it. The cache-side pair mass says 95% of
+                # colliding PAIRS sit in cells over 1000 -- and the probes
+                # never visit those cells, because exp(exp(a + g*U) - y)
+                # does not reach the near-zero and near-constant families
+                # that build them. Two different populations; only this one
+                # predicts hits.
+                probe_hit_mass={f">{thr}": round(o / max(raw, 1), 6)
+                                for thr, o in zip(HIT_MASS_BINS, raw_over)},
+                cache_pair_mass=pair_mass_by_bucket_size(
                     [b for t in tables for b in map(len, t.values())]))
 
 
@@ -674,10 +701,6 @@ def main() -> int:
     ap.add_argument("--or-config", type=_parse_or_config, nargs="+",
                     default=[(16, 0.002, 4)], metavar="BAND,RES,TABLES",
                     help="OR arms to run in --mode or.")
-    ap.add_argument("--bucket-cap", type=int, default=0,
-                    help="drop cells larger than this before probing. "
-                         "0 = off. A cap loses every pair in a dropped "
-                         "cell, in every table that drops it.")
     ap.add_argument("--size-bands", type=int, nargs="+", default=[4, 8, 16])
     ap.add_argument("--size-res", type=float, nargs="+",
                     default=[0.01, 0.005, 0.002, 0.001])
@@ -775,8 +798,7 @@ def main() -> int:
             print(json.dumps(results[-1]), flush=True)
     else:
         results.append(run_join(entries, values, ScalarKeyer().keys, y_scr,
-                                X, y, X_held, y_held, "arcsinh-int16",
-                                bucket_cap=args.bucket_cap))
+                                X, y, X_held, y_held, "arcsinh-int16"))
         print(json.dumps(results[-1]), flush=True)
         d = values.shape[1]
         for band, res, n_tables in args.or_config:
@@ -784,8 +806,7 @@ def main() -> int:
             label = f"or-band{min(band, d)}@{res:g}x{n_tables}"
             results.append(run_join(entries, values,
                                     [k.keys for k in keyers], y_scr, X, y,
-                                    X_held, y_held, label,
-                                    bucket_cap=args.bucket_cap))
+                                    X_held, y_held, label))
             print(json.dumps(results[-1]), flush=True)
 
     out.parent.mkdir(parents=True, exist_ok=True)

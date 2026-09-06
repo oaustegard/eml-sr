@@ -155,17 +155,6 @@ def test_single_table_probe_returns_the_bucket_itself():
     assert 0 in set(cand)
 
 
-def test_bucket_cap_drops_whole_cells_and_reports_the_loss():
-    V = np.zeros((100, D))                  # one cell, 90 entries
-    V[:10] = np.arange(1, 11)[:, None]      # ...plus 10 singletons
-    keyers = [BandedScalarKeyer(D, 0.5, D, seed=0)]
-    tables, stats = _build_tables(V, [k.keys for k in keyers], bucket_cap=20)
-    assert stats["capped_cells"] == 1
-    assert stats["capped_entries"] == 90
-    assert stats["max_bucket"] <= 20
-    assert sum(len(v) for v in tables[0].values()) == 10
-
-
 def test_or_arm_runs_and_reports_per_table_stats():
     V = _values()
     keyers = or_table_set(D, 0.05, D, 3)
@@ -289,7 +278,12 @@ def test_simulate_probe_load_scales_and_bounds_the_union():
         assert out["sample_union_hits"] <= out["sample_raw_hits"]
         assert out["pred_hits"] >= out["sample_union_hits"]
         assert 0.0 <= out["union_over_raw"] <= 1.0
-        assert set(out["pair_mass"]) == {">1", ">10", ">100", ">1000"}
+        assert set(out["cache_pair_mass"]) == {">1", ">10", ">100", ">1000"}
+        assert set(out["probe_hit_mass"]) == {">1", ">10", ">100", ">1000"}
+        # every hit comes from a cell of at least 1, and the mass is
+        # monotone decreasing in the threshold
+        m = out["probe_hit_mass"]
+        assert m[">1"] >= m[">10"] >= m[">100"] >= m[">1000"]
 
 
 def test_pair_mass_by_bucket_size_splits_the_load():
@@ -360,3 +354,34 @@ def test_or_and_single_table_agree_on_the_planted_pair():
     single = _run(args, ScalarKeyer().keys, "single")
     many = _run(args, [k.keys for k in or_table_set(D, 0.01, D, 3)], "or-3")
     assert set(single["sample_forms"]) <= set(many["sample_forms"])
+
+
+# ─── the int16 clip, at probe scale ─────────────────────────────────
+
+def test_int16_clip_merges_distinct_probe_scale_values():
+    """The measured 16.4M-hit "collision storm" is this.
+
+    A probe is exp(exp(a_u + g_u*U) - y_scr), which reaches the top of
+    float64. rint(arcsinh(v)/0.01) saturates int16 above |v| ~ 4e138, so
+    every probe past that pins to the same code and they all meet in one
+    cell -- regardless of how far apart they actually are. int32 moves
+    the rail out by 1e5 and the same values separate.
+    """
+    V = np.array([[1e150] * D, [1e200] * D, [1e250] * D, [1e300] * D])
+    int16_keys = ScalarKeyer(0.01).keys(V)
+    assert len(set(int16_keys)) == 1                      # one cell
+    assert np.frombuffer(int16_keys[0], dtype=np.int16).max() == INT16_LIMIT
+
+    int32_keys = BandedScalarKeyer(D, 0.01, D, seed=None).keys(V)
+    assert len(set(int32_keys)) == 4                      # four cells
+    assert clip_fraction(V, 0.01, limit=INT16_LIMIT) == 1.0
+    assert clip_fraction(V, 0.01, limit=INT32_LIMIT) == 0.0
+
+
+def test_the_two_keyers_still_agree_below_the_int16_rail():
+    """The partition only diverges past the rail: at ordinary cache
+    magnitudes the int32 keyer reproduces the measured arm's cells."""
+    V = _values(400)
+    assert clip_fraction(V, 0.01, limit=INT16_LIMIT) == 0.0
+    assert _partition(ScalarKeyer(0.01).keys(V)) == \
+        _partition(BandedScalarKeyer(D, 0.01, D, seed=None).keys(V))
