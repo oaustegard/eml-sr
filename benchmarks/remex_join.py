@@ -46,6 +46,23 @@ mass. 99.94% of the measured load was the clip. `BandedScalarKeyer`
 therefore uses int32 codes; `clip_fraction` reports the margin. The
 issue's "67,000x candidate load" for coarsening does not survive it.
 
+END TO END, same target and depth, from results/skeleton_enum/remex_join_or.json:
+
+    arm                          discoveries   hits    key MB   wall
+    arcsinh-int16 (measured arm)         473   16.4M      25   308.5s
+    int32, res 0.01, 1 table             473    9,892     51   154.8s
+    int32, res 0.001, 4 tables           473    8,204    227   588.6s
+
+Widening the code loses nothing and halves the wall clock. The OR arm
+finds the same 473 for 4.5x the key memory and 4x the wall clock, and
+`key_mismatch` says why: the 473 confirmed pairs agree to a max of
+1.33e-5 in arcsinh space, so at res 0.01 the worst per-coordinate
+straddle probability is 0.13% and a single table already collects
+(1 - 0.0013)**16 ~= 98% of them. There is no recall left for the OR to
+recover here. It would start to earn its keep below res ~1e-4, and the
+lever this search actually wants is a COARSER key, which the clip fix
+makes affordable.
+
 `run_join` takes a list of keyers, probes every table, and unions the
 candidate indices before the 16-sample screen, so each pair reaches
 `_confirm` once regardless of how many tables admitted it. The screen

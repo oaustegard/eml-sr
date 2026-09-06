@@ -1,0 +1,115 @@
+{
+ "target": "sum_of_squares",
+ "max_side_depth": 3,
+ "cache_entries": 985467,
+ "results": [
+  {
+   "label": "arcsinh-int16",
+   "discoveries": 473,
+   "hash_hits": 16402595,
+   "raw_hits": 16402595,
+   "joins_tested": 252279552,
+   "wall_s": 308.5,
+   "sample_forms": [
+    "eml(-2*(eml(-1 + -1*(eml(1 + 1*(eml(x0, 1)), 1)), x0)), 1*(eml(-1*(eml(2 + -2*(eml(0, x3)), 1)), 1)))",
+    "eml(-2*(eml(-1 + -1*(eml(1 + 1*(eml(x0, 1)), 2)), x0)), 1*(eml(-1*(eml(2 + -2*(eml(0, x3)), 1)), 1)))",
+    "eml(-2*(eml(-1 + -1*(eml(1 + 1*(eml(x0, 1)), x0)), x0)), 1*(eml(-1*(eml(2 + -2*(eml(0, x3)), 1)), 1)))"
+   ],
+   "key_mismatch": {
+    "n": 473,
+    "min": 2.220446049250313e-16,
+    "median": 3.9251857808508817e-07,
+    "p90": 4.2596177046494436e-06,
+    "max": 1.3279087477058305e-05
+   },
+   "n_tables": 1,
+   "key_bytes": 25068704,
+   "n_buckets": 783397,
+   "max_bucket": 5568,
+   "per_table": [
+    {
+     "n_buckets": 783397,
+     "max_bucket": 5568,
+     "mean_bucket": 1.258
+    }
+   ]
+  },
+  {
+   "label": "or-band16@0.01x1",
+   "discoveries": 473,
+   "hash_hits": 9892,
+   "raw_hits": 9892,
+   "joins_tested": 252279552,
+   "wall_s": 154.8,
+   "sample_forms": [
+    "eml(-2*(eml(-1 + -1*(eml(1 + 1*(eml(x0, 1)), 1)), x0)), 1*(eml(-1*(eml(2 + -2*(eml(0, x3)), 1)), 1)))",
+    "eml(-2*(eml(-1 + -1*(eml(1 + 1*(eml(x0, 1)), 2)), x0)), 1*(eml(-1*(eml(2 + -2*(eml(0, x3)), 1)), 1)))",
+    "eml(-2*(eml(-1 + -1*(eml(1 + 1*(eml(x0, 1)), x0)), x0)), 1*(eml(-1*(eml(2 + -2*(eml(0, x3)), 1)), 1)))"
+   ],
+   "key_mismatch": {
+    "n": 473,
+    "min": 2.220446049250313e-16,
+    "median": 3.9251857808508817e-07,
+    "p90": 4.2596177046494436e-06,
+    "max": 1.3279087477058305e-05
+   },
+   "n_tables": 1,
+   "key_bytes": 50642752,
+   "n_buckets": 791293,
+   "max_bucket": 4973,
+   "per_table": [
+    {
+     "n_buckets": 791293,
+     "max_bucket": 4973,
+     "mean_bucket": 1.245
+    }
+   ]
+  },
+  {
+   "label": "or-band16@0.001x4",
+   "discoveries": 473,
+   "hash_hits": 8204,
+   "raw_hits": 28719,
+   "joins_tested": 252279552,
+   "wall_s": 588.6,
+   "sample_forms": [
+    "eml(-2*(eml(-1 + -1*(eml(1 + 1*(eml(x0, 1)), 1)), x0)), 1*(eml(-1*(eml(2 + -2*(eml(0, x3)), 1)), 1)))",
+    "eml(-2*(eml(-1 + -1*(eml(1 + 1*(eml(x0, 1)), 2)), x0)), 1*(eml(-1*(eml(2 + -2*(eml(0, x3)), 1)), 1)))",
+    "eml(-2*(eml(-1 + -1*(eml(1 + 1*(eml(x0, 1)), x0)), x0)), 1*(eml(-1*(eml(2 + -2*(eml(0, x3)), 1)), 1)))"
+   ],
+   "key_mismatch": {
+    "n": 473,
+    "min": 2.220446049250313e-16,
+    "median": 3.9251857808508817e-07,
+    "p90": 4.2596177046494436e-06,
+    "max": 1.3279087477058305e-05
+   },
+   "n_tables": 4,
+   "key_bytes": 227428672,
+   "n_buckets": 3553573,
+   "max_bucket": 3430,
+   "per_table": [
+    {
+     "n_buckets": 888461,
+     "max_bucket": 3430,
+     "mean_bucket": 1.109
+    },
+    {
+     "n_buckets": 887942,
+     "max_bucket": 3417,
+     "mean_bucket": 1.11
+    },
+    {
+     "n_buckets": 888960,
+     "max_bucket": 3272,
+     "mean_bucket": 1.109
+    },
+    {
+     "n_buckets": 888210,
+     "max_bucket": 3304,
+     "mean_bucket": 1.109
+    }
+   ]
+  }
+ ]
+}
