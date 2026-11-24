@@ -1,0 +1,142 @@
+{
+ "det2": {
+  "sub(prod, prod)": {
+   "size": 17,
+   "depth": 10,
+   "witness": "e(e(1,e(e(e(1,e(e(1,e(1,x0)),1)),x3),1)),e(e(e(1,e(e(e(1,e(e(1,e(1,x1)),1)),x2),1)),1),1))",
+   "complex_all_real_inputs": {
+    "points": 4000,
+    "exact": 4000,
+    "max_rel_err": 4.9359967630304545e-15
+   },
+   "complex_mp40_max_rel_err_30pts": 1.3172134700972926e-16,
+   "real_box_0.2_5": {
+    "points": 4000,
+    "exact": 4000,
+    "max_rel_err": 8.124085643369601e-15
+   },
+   "real_box_0.2_1.5": {
+    "points": 4000,
+    "exact": 4000,
+    "max_rel_err": 1.2659561369116175e-15
+   },
+   "sympy_identity": true
+  }
+ },
+ "perm2": {
+  "sum(prod, prod)": {
+   "size": 25,
+   "depth": 16,
+   "witness": "e(1,e(e(e(1,e(e(1,e(1,e(e(e(1,e(e(e(1,e(e(1,e(1,x0)),1)),x3),1)),1),1))),1)),e(e(e(1,e(e(e(1,e(e(1,e(1,x1)),1)),x2),1)),1),1)),1))",
+   "complex_all_real_inputs": {
+    "points": 4000,
+    "exact": 4000,
+    "max_rel_err": 5.0058066216541e-15
+   },
+   "complex_mp40_max_rel_err_30pts": 1.1717762706841745e-16,
+   "real_box_0.2_5": {
+    "points": 4000,
+    "exact": 3045,
+    "max_rel_err": 8.151941684220792e-16
+   },
+   "real_box_0.2_1.5": {
+    "points": 4000,
+    "exact": 4000,
+    "max_rel_err": 8.362632951284678e-16
+   },
+   "sympy_identity": true
+  }
+ },
+ "det3": {
+  "cofactor a*m1 - (b*m2 - c*m3)": {
+   "size": 77,
+   "depth": 18,
+   "witness": "e(e(1,e(e(e(1,e(e(1,e(1,x0)),1)),e(e(1,e(e(e(1,e(e(1,e(1,x4)),1)),x8),1)),e(e(e(1,e(e(e(1,e(e(1,e(1,x5)),1)),x7),1)),1),1))),1)),e(e(e(1,e(e(e(1,e(e(1,e(1,x1)),1)),e(e(1,e(e(e(1,e(e(1,e(1,x3)),1)),x8),1)),e(e(e(1,e(e(e(1,e(e(1,e(1,x5)),1)),x6),1)),1),1))),1)),e(e(e(1,e(e(e(1,e(e(1,e(1,x2)),1)),e(e(1,e(e(e(1,e(e(1,e(1,x3)),1)),x7),1)),e(e(e(1,e(e(e(1,e(e(1,e(1,x4)),1)),x6),1)),1),1))),1)),1),1)),1))",
+   "complex_all_real_inputs": {
+    "points": 4000,
+    "exact": 4000,
+    "max_rel_err": 2.3885442787390393e-14
+   },
+   "complex_mp40_max_rel_err_30pts": 4.241049679604145e-16,
+   "real_box_0.2_5": {
+    "points": 4000,
+    "exact": 644,
+    "max_rel_err": 9.010574561603726e-15
+   },
+   "real_box_0.2_1.5": {
+    "points": 4000,
+    "exact": 658,
+    "max_rel_err": 1.075122927724567e-15
+   },
+   "sympy_identity": true
+  },
+  "sum3(P) - sum3(Q)": {
+   "size": 105,
+   "depth": 28,
+   "witness": "e(e(1,e(e(1,e(1,e(e(e(1,e(e(1,e(e(1,e(e(1,e(1,e(e(e(1,e(e(e(1,e(e(1,e(e(1,e(e(1,e(1,x0)),1)),x4)),1)),x8),1)),1),1))),1)),e(e(e(1,e(e(e(1,e(e(1,e(e(1,e(e(1,e(1,x1)),1)),x5)),1)),x6),1)),1),1))),1)),e(e(e(1,e(e(e(1,e(e(1,e(e(1,e(e(1,e(1,x2)),1)),x3)),1)),x7),1)),1),1)),1))),1)),e(e(1,e(e(e(1,e(e(1,e(e(1,e(e(1,e(1,e(e(e(1,e(e(e(1,e(e(1,e(e(1,e(e(1,e(1,x0)),1)),x5)),1)),x7),1)),1),1))),1)),e(e(e(1,e(e(e(1,e(e(1,e(e(1,e(e(1,e(1,x1)),1)),x3)),1)),x8),1)),1),1))),1)),e(e(e(1,e(e(e(1,e(e(1,e(e(1,e(e(1,e(1,x2)),1)),x4)),1)),x6),1)),1),1)),1)),1))",
+   "complex_all_real_inputs": {
+    "points": 4000,
+    "exact": 4000,
+    "max_rel_err": 2.0406005078498985e-14
+   },
+   "complex_mp40_max_rel_err_30pts": 4.241049679604145e-16,
+   "real_box_0.2_5": {
+    "points": 4000,
+    "exact": 1149,
+    "max_rel_err": 3.9987402517048885e-15
+   },
+   "real_box_0.2_1.5": {
+    "points": 4000,
+    "exact": 3983,
+    "max_rel_err": 2.0083254439537875e-15
+   },
+   "sympy_identity": true
+  }
+ },
+ "perm3": {
+  "cofactor sum3(a*p1, b*p2, c*p3)": {
+   "size": 113,
+   "depth": 32,
+   "witness": "e(1,e(e(e(1,e(e(1,e(e(1,e(e(1,e(1,e(e(e(1,e(e(e(1,e(e(1,e(1,x0)),1)),e(1,e(e(e(1,e(e(1,e(1,e(e(e(1,e(e(e(1,e(e(1,e(1,x4)),1)),x8),1)),1),1))),1)),e(e(e(1,e(e(e(1,e(e(1,e(1,x5)),1)),x7),1)),1),1)),1))),1)),1),1))),1)),e(e(e(1,e(e(e(1,e(e(1,e(1,x1)),1)),e(1,e(e(e(1,e(e(1,e(1,e(e(e(1,e(e(e(1,e(e(1,e(1,x3)),1)),x8),1)),1),1))),1)),e(e(e(1,e(e(e(1,e(e(1,e(1,x5)),1)),x6),1)),1),1)),1))),1)),1),1))),1)),e(e(e(1,e(e(e(1,e(e(1,e(1,x2)),1)),e(1,e(e(e(1,e(e(1,e(1,e(e(e(1,e(e(e(1,e(e(1,e(1,x3)),1)),x7),1)),1),1))),1)),e(e(e(1,e(e(e(1,e(e(1,e(1,x4)),1)),x6),1)),1),1)),1))),1)),1),1)),1))",
+   "complex_all_real_inputs": {
+    "points": 4000,
+    "exact": 4000,
+    "max_rel_err": 1.3296866899149559e-14
+   },
+   "complex_mp40_max_rel_err_30pts": 1.0742651331651297e-15,
+   "real_box_0.2_5": {
+    "points": 4000,
+    "exact": 617,
+    "max_rel_err": 1.4936841276888291e-15
+   },
+   "real_box_0.2_1.5": {
+    "points": 4000,
+    "exact": 3841,
+    "max_rel_err": 1.3250467245170737e-15
+   },
+   "sympy_identity": true
+  },
+  "sum6 of triple products": {
+   "size": 101,
+   "depth": 36,
+   "witness": "e(1,e(e(e(1,e(e(1,e(e(1,e(e(1,e(e(1,e(e(1,e(e(1,e(e(1,e(e(1,e(e(1,e(1,e(e(e(1,e(e(e(1,e(e(1,e(e(1,e(e(1,e(1,x0)),1)),x4)),1)),x8),1)),1),1))),1)),e(e(e(1,e(e(e(1,e(e(1,e(e(1,e(e(1,e(1,x1)),1)),x5)),1)),x6),1)),1),1))),1)),e(e(e(1,e(e(e(1,e(e(1,e(e(1,e(e(1,e(1,x2)),1)),x3)),1)),x7),1)),1),1))),1)),e(e(e(1,e(e(e(1,e(e(1,e(e(1,e(e(1,e(1,x0)),1)),x5)),1)),x7),1)),1),1))),1)),e(e(e(1,e(e(e(1,e(e(1,e(e(1,e(e(1,e(1,x1)),1)),x3)),1)),x8),1)),1),1))),1)),e(e(e(1,e(e(e(1,e(e(1,e(e(1,e(e(1,e(1,x2)),1)),x4)),1)),x6),1)),1),1)),1))",
+   "complex_all_real_inputs": {
+    "points": 4000,
+    "exact": 4000,
+    "max_rel_err": 2.0051966382468712e-14
+   },
+   "complex_mp40_max_rel_err_30pts": 1.0742651331651297e-15,
+   "real_box_0.2_5": {
+    "points": 4000,
+    "exact": 454,
+    "max_rel_err": 1.0563939541650874e-15
+   },
+   "real_box_0.2_1.5": {
+    "points": 4000,
+    "exact": 3713,
+    "max_rel_err": 1.5906103607022759e-15
+   },
+   "sympy_identity": true
+  }
+ }
+}

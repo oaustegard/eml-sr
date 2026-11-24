@@ -1,0 +1,136 @@
+{
+ "branch": "complex",
+ "K": 6,
+ "seed": 1,
+ "enumerated_to": 7,
+ "root_join_exact_to": 8,
+ "zmax": 0,
+ "levels": [
+  {
+   "size": 1,
+   "candidates": 25,
+   "distinct": 25,
+   "secs": 0.0
+  },
+  {
+   "size": 2,
+   "candidates": 250,
+   "distinct": 250,
+   "secs": 0.0
+  },
+  {
+   "size": 3,
+   "candidates": 2593,
+   "distinct": 2573,
+   "secs": 0.0
+  },
+  {
+   "size": 4,
+   "candidates": 29803,
+   "distinct": 29693,
+   "secs": 0.1
+  },
+  {
+   "size": 5,
+   "candidates": 362392,
+   "distinct": 361080,
+   "secs": 1.0
+  },
+  {
+   "size": 6,
+   "candidates": 4630492,
+   "distinct": 4614740,
+   "secs": 16.6
+  },
+  {
+   "size": 7,
+   "candidates": 61159268,
+   "distinct": 60960736,
+   "secs": 1007.2
+  }
+ ],
+ "targets": {
+  "perm": {
+   "target": "x0*x3 + x1*x2",
+   "status": "> 8 (frontier to 7, root join to 8, shape joins empty)"
+  },
+  "det": {
+   "target": "x0*x3 - x1*x2",
+   "status": "> 8 (frontier to 7, root join to 8, shape joins empty)"
+  },
+  "mul": {
+   "target": "x0*x1",
+   "status": "> 7 (frontier only)"
+  },
+  "add": {
+   "target": "x0 + x1",
+   "status": "> 8 (frontier to 7, root join to 8, shape joins empty)"
+  },
+  "sub": {
+   "target": "x0 - x1",
+   "status": "minimal",
+   "smallest": {
+    "size": 5,
+    "depth": 4,
+    "how": "frontier",
+    "witness": "e(e(1,e(e(1,x0),1)),e(x1,1))",
+    "check": {
+     "points": 1000,
+     "exact": 1000,
+     "max_err_on_exact": 5.303206075946068e-16
+    }
+   },
+   "smallest_exact_on_all_fresh_points": {
+    "size": 5,
+    "depth": 4,
+    "how": "frontier",
+    "witness": "e(e(1,e(e(1,x0),1)),e(x1,1))",
+    "check": {
+     "points": 1000,
+     "exact": 1000,
+     "max_err_on_exact": 5.303206075946068e-16
+    }
+   }
+  },
+  "neg": {
+   "target": "-x0",
+   "status": "> 7 (frontier only)"
+  },
+  "inv": {
+   "target": "1/x0",
+   "status": "> 7 (frontier only)"
+  },
+  "div": {
+   "target": "x0/x1",
+   "status": "> 7 (frontier only)"
+  },
+  "lnmul": {
+   "target": "log(x0) + log(x1)",
+   "status": "> 7 (frontier only)"
+  },
+  "expmul": {
+   "target": "exp(x0*x1)",
+   "status": "> 8 (frontier to 7, root join to 8, shape joins empty)"
+  },
+  "expnegmul": {
+   "target": "exp(-x0*x1)",
+   "status": "> 8 (frontier to 7, root join to 8, shape joins empty)"
+  },
+  "negmul": {
+   "target": "-x0*x1",
+   "status": "> 8 (frontier to 7, root join to 8, shape joins empty)"
+  },
+  "e_minus_mul": {
+   "target": "E - x0*x1",
+   "status": "> 7 (frontier only)"
+  },
+  "mul3": {
+   "target": "x0*x1*x2",
+   "status": "> 8 (frontier to 7, root join to 8, shape joins empty)"
+  },
+  "lnmul3": {
+   "target": "log(x0)+log(x1)+log(x2)",
+   "status": "> 7 (frontier only)"
+  }
+ }
+}

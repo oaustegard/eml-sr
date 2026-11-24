@@ -1,0 +1,308 @@
+{
+ "branch": "real",
+ "K": 6,
+ "seed": 1,
+ "enumerated_to": 8,
+ "root_join_exact_to": 9,
+ "zmax": 0,
+ "levels": [
+  {
+   "size": 1,
+   "candidates": 25,
+   "distinct": 25,
+   "secs": 0.0
+  },
+  {
+   "size": 2,
+   "candidates": 200,
+   "distinct": 200,
+   "secs": 0.0
+  },
+  {
+   "size": 3,
+   "candidates": 1463,
+   "distinct": 1443,
+   "secs": 0.0
+  },
+  {
+   "size": 4,
+   "candidates": 10297,
+   "distinct": 10195,
+   "secs": 0.0
+  },
+  {
+   "size": 5,
+   "candidates": 73419,
+   "distinct": 72616,
+   "secs": 0.1
+  },
+  {
+   "size": 6,
+   "candidates": 544294,
+   "distinct": 538389,
+   "secs": 0.8
+  },
+  {
+   "size": 7,
+   "candidates": 4116273,
+   "distinct": 4068475,
+   "secs": 7.5
+  },
+  {
+   "size": 8,
+   "candidates": 31794612,
+   "distinct": 31385020,
+   "secs": 160.9
+  }
+ ],
+ "targets": {
+  "perm": {
+   "target": "x0*x3 + x1*x2",
+   "status": "> 9 (frontier to 8, root join to 9, shape joins empty)"
+  },
+  "det": {
+   "target": "x0*x3 - x1*x2",
+   "status": "upper bound",
+   "smallest": {
+    "size": 17,
+    "depth": 10,
+    "how": "S1",
+    "witness": "e(e(1,e(e(e(1,e(e(1,e(1,x3)),1)),x0),1)),e(e(e(1,e(e(e(1,e(e(1,e(1,x1)),1)),x2),1)),1),1))",
+    "check": {
+     "points": 1000,
+     "exact": 1000,
+     "max_err_on_exact": 4.2600122600725515e-15
+    }
+   },
+   "smallest_exact_on_all_fresh_points": {
+    "size": 17,
+    "depth": 10,
+    "how": "S1",
+    "witness": "e(e(1,e(e(e(1,e(e(1,e(1,x3)),1)),x0),1)),e(e(e(1,e(e(e(1,e(e(1,e(1,x1)),1)),x2),1)),1),1))",
+    "check": {
+     "points": 1000,
+     "exact": 1000,
+     "max_err_on_exact": 4.2600122600725515e-15
+    }
+   }
+  },
+  "mul": {
+   "target": "x0*x1",
+   "status": "minimal",
+   "smallest": {
+    "size": 8,
+    "depth": 8,
+    "how": "frontier",
+    "witness": "e(e(1,e(e(e(1,e(e(1,e(1,x1)),1)),x0),1)),1)",
+    "check": {
+     "points": 1000,
+     "exact": 1000,
+     "max_err_on_exact": 7.281568952204958e-16
+    }
+   },
+   "smallest_exact_on_all_fresh_points": {
+    "size": 8,
+    "depth": 8,
+    "how": "frontier",
+    "witness": "e(e(1,e(e(e(1,e(e(1,e(1,x1)),1)),x0),1)),1)",
+    "check": {
+     "points": 1000,
+     "exact": 1000,
+     "max_err_on_exact": 7.281568952204958e-16
+    }
+   }
+  },
+  "add": {
+   "target": "x0 + x1",
+   "status": "minimal",
+   "smallest": {
+    "size": 9,
+    "depth": 8,
+    "how": "S0",
+    "witness": "e(1,e(e(e(1,e(e(1,e(1,e(x0,1))),1)),e(x1,1)),1))",
+    "check": {
+     "points": 1000,
+     "exact": 807,
+     "max_err_on_exact": 5.924512212974399e-16
+    }
+   },
+   "smallest_exact_on_all_fresh_points": {
+    "size": 9,
+    "depth": 8,
+    "how": "S0",
+    "witness": "e(x0,e(e(e(1,e(e(1,e(x0,e(x0,1))),1)),e(x1,1)),1))",
+    "check": {
+     "points": 1000,
+     "exact": 1000,
+     "max_err_on_exact": 1.1285025760579e-14
+    }
+   }
+  },
+  "sub": {
+   "target": "x0 - x1",
+   "status": "minimal",
+   "smallest": {
+    "size": 5,
+    "depth": 4,
+    "how": "frontier",
+    "witness": "e(e(1,e(e(1,x0),1)),e(x1,1))",
+    "check": {
+     "points": 1000,
+     "exact": 1000,
+     "max_err_on_exact": 4.111210867750655e-16
+    }
+   },
+   "smallest_exact_on_all_fresh_points": {
+    "size": 5,
+    "depth": 4,
+    "how": "frontier",
+    "witness": "e(e(1,e(e(1,x0),1)),e(x1,1))",
+    "check": {
+     "points": 1000,
+     "exact": 1000,
+     "max_err_on_exact": 4.111210867750655e-16
+    }
+   }
+  },
+  "neg": {
+   "target": "-x0",
+   "status": "minimal",
+   "smallest": {
+    "size": 8,
+    "depth": 6,
+    "how": "frontier",
+    "witness": "e(e(1,e(e(1,e(1,e(x0,1))),1)),e(e(1,1),1))",
+    "check": {
+     "points": 1000,
+     "exact": 807,
+     "max_err_on_exact": 5.756294593405622e-16
+    }
+   },
+   "smallest_exact_on_all_fresh_points": {
+    "size": 8,
+    "depth": 6,
+    "how": "frontier",
+    "witness": "e(e(1,e(e(1,e(x0,e(x0,1))),1)),e(e(x0,1),1))",
+    "check": {
+     "points": 1000,
+     "exact": 1000,
+     "max_err_on_exact": 1.0149209384180554e-14
+    }
+   }
+  },
+  "inv": {
+   "target": "1/x0",
+   "status": "minimal",
+   "smallest": {
+    "size": 8,
+    "depth": 6,
+    "how": "frontier",
+    "witness": "e(e(e(1,e(e(1,e(x1,x0)),1)),e(e(x1,1),1)),1)",
+    "check": {
+     "points": 1000,
+     "exact": 983,
+     "max_err_on_exact": 4.234948626903231e-14
+    }
+   },
+   "smallest_exact_on_all_fresh_points": null
+  },
+  "div": {
+   "target": "x0/x1",
+   "status": "minimal",
+   "smallest": {
+    "size": 8,
+    "depth": 6,
+    "how": "frontier",
+    "witness": "e(e(e(1,e(e(1,e(1,x1)),1)),e(e(1,x0),1)),1)",
+    "check": {
+     "points": 1000,
+     "exact": 1000,
+     "max_err_on_exact": 1.010856192802222e-15
+    }
+   },
+   "smallest_exact_on_all_fresh_points": {
+    "size": 8,
+    "depth": 6,
+    "how": "frontier",
+    "witness": "e(e(e(1,e(e(1,e(1,x1)),1)),e(e(1,x0),1)),1)",
+    "check": {
+     "points": 1000,
+     "exact": 1000,
+     "max_err_on_exact": 1.010856192802222e-15
+    }
+   }
+  },
+  "lnmul": {
+   "target": "log(x0) + log(x1)",
+   "status": "minimal",
+   "smallest": {
+    "size": 7,
+    "depth": 7,
+    "how": "frontier",
+    "witness": "e(1,e(e(e(1,e(e(1,e(1,x1)),1)),x0),1))",
+    "check": {
+     "points": 1000,
+     "exact": 1000,
+     "max_err_on_exact": 8.547582945183275e-16
+    }
+   },
+   "smallest_exact_on_all_fresh_points": {
+    "size": 7,
+    "depth": 7,
+    "how": "frontier",
+    "witness": "e(1,e(e(e(1,e(e(1,e(1,x1)),1)),x0),1))",
+    "check": {
+     "points": 1000,
+     "exact": 1000,
+     "max_err_on_exact": 8.547582945183275e-16
+    }
+   }
+  },
+  "expmul": {
+   "target": "exp(x0*x1)",
+   "status": "minimal",
+   "smallest": {
+    "size": 9,
+    "depth": 9,
+    "how": "S0",
+    "witness": "e(e(e(1,e(e(e(1,e(e(1,e(1,x1)),1)),x0),1)),1),1)",
+    "check": {
+     "points": 1000,
+     "exact": 1000,
+     "max_err_on_exact": 1.0648828994582176e-14
+    }
+   },
+   "smallest_exact_on_all_fresh_points": {
+    "size": 9,
+    "depth": 9,
+    "how": "S0",
+    "witness": "e(e(e(1,e(e(e(1,e(e(1,e(1,x1)),1)),x0),1)),1),1)",
+    "check": {
+     "points": 1000,
+     "exact": 1000,
+     "max_err_on_exact": 1.0648828994582176e-14
+    }
+   }
+  },
+  "expnegmul": {
+   "target": "exp(-x0*x1)",
+   "status": "> 9 (frontier to 8, root join to 9, shape joins empty)"
+  },
+  "negmul": {
+   "target": "-x0*x1",
+   "status": "> 9 (frontier to 8, root join to 9, shape joins empty)"
+  },
+  "e_minus_mul": {
+   "target": "E - x0*x1",
+   "status": "> 8 (frontier only)"
+  },
+  "mul3": {
+   "target": "x0*x1*x2",
+   "status": "> 9 (frontier to 8, root join to 9, shape joins empty)"
+  },
+  "lnmul3": {
+   "target": "log(x0)+log(x1)+log(x2)",
+   "status": "> 8 (frontier only)"
+  }
+ }
+}
