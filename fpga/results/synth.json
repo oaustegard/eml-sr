@@ -1,0 +1,250 @@
+{
+ "eml_cell/ecp5": {
+  "cells": {
+   "CCU2C": 163,
+   "DP16KD": 4,
+   "L6MUX21": 43,
+   "LUT4": 736,
+   "MULT18X18D": 6,
+   "PFUMX": 149,
+   "TRELLIS_FF": 708
+  },
+  "design": "eml_cell",
+  "fmax_mhz": 88.0126724243164,
+  "pnr_rc": 0,
+  "target": "ecp5",
+  "utilization": {
+   "DCCA": 1,
+   "DP16KD": 4,
+   "MULT18X18D": 6,
+   "TRELLIS_COMB": 1124,
+   "TRELLIS_FF": 708,
+   "TRELLIS_IO": 100
+  },
+  "yosys_rc": 0
+ },
+ "eml_cell/ice40": {
+  "cells": {
+   "SB_CARRY": 324,
+   "SB_DFF": 577,
+   "SB_DFFSR": 44,
+   "SB_DFFSS": 87,
+   "SB_LUT4": 2787,
+   "SB_RAM40_4K": 7
+  },
+  "design": "eml_cell",
+  "fmax_mhz": 64.57028198242188,
+  "pnr_rc": 0,
+  "target": "ice40",
+  "utilization": {
+   "ICESTORM_LC": 3309,
+   "ICESTORM_RAM": 7,
+   "SB_GB": 2,
+   "SB_IO": 100
+  },
+  "yosys_rc": 0
+ },
+ "eml_tree_add/ecp5": {
+  "cells": {
+   "CCU2C": 929,
+   "DP16KD": 32,
+   "L6MUX21": 140,
+   "LUT4": 3515,
+   "MULT18X18D": 34,
+   "PFUMX": 625,
+   "TRELLIS_FF": 5958
+  },
+  "design": "eml_tree_add",
+  "fmax_mhz": 72.13966369628906,
+  "pnr_rc": 0,
+  "target": "ecp5",
+  "utilization": {
+   "DCCA": 1,
+   "DP16KD": 32,
+   "MULT18X18D": 34,
+   "TRELLIS_COMB": 5703,
+   "TRELLIS_FF": 5958,
+   "TRELLIS_IO": 100
+  },
+  "yosys_rc": 0
+ },
+ "eml_tree_mul/ecp5": {
+  "cells": {
+   "CCU2C": 809,
+   "DP16KD": 29,
+   "L6MUX21": 122,
+   "LUT4": 3131,
+   "MULT18X18D": 29,
+   "PFUMX": 573,
+   "TRELLIS_FF": 5493
+  },
+  "design": "eml_tree_mul",
+  "fmax_mhz": 76.1440658569336,
+  "pnr_rc": 0,
+  "target": "ecp5",
+  "utilization": {
+   "DCCA": 1,
+   "DP16KD": 29,
+   "MULT18X18D": 29,
+   "TRELLIS_COMB": 5035,
+   "TRELLIS_FF": 5493,
+   "TRELLIS_IO": 100
+  },
+  "yosys_rc": 0
+ },
+ "eml_tree_sub/ecp5": {
+  "cells": {
+   "CCU2C": 545,
+   "DP16KD": 18,
+   "L6MUX21": 138,
+   "LUT4": 2238,
+   "MULT18X18D": 20,
+   "PFUMX": 452,
+   "TRELLIS_FF": 3328
+  },
+  "design": "eml_tree_sub",
+  "fmax_mhz": 78.28401184082031,
+  "pnr_rc": 0,
+  "target": "ecp5",
+  "utilization": {
+   "DCCA": 1,
+   "DP16KD": 18,
+   "MULT18X18D": 20,
+   "TRELLIS_COMB": 3522,
+   "TRELLIS_FF": 3328,
+   "TRELLIS_IO": 100
+  },
+  "yosys_rc": 0
+ },
+ "eml_tree_sub/ice40": {
+  "cells": {
+   "SB_CARRY": 1176,
+   "SB_DFF": 2871,
+   "SB_DFFSR": 134,
+   "SB_DFFSS": 323,
+   "SB_LUT4": 9036,
+   "SB_RAM40_4K": 33
+  },
+  "design": "eml_tree_sub",
+  "pnr_rc": 125,
+  "target": "ice40",
+  "yosys_rc": 0
+ },
+ "q16_add/ecp5": {
+  "cells": {
+   "CCU2C": 17,
+   "LUT4": 33,
+   "TRELLIS_FF": 96
+  },
+  "design": "q16_add",
+  "fmax_mhz": 180.24513244628906,
+  "pnr_rc": 0,
+  "target": "ecp5",
+  "utilization": {
+   "DCCA": 1,
+   "TRELLIS_COMB": 73,
+   "TRELLIS_FF": 96,
+   "TRELLIS_IO": 97
+  },
+  "yosys_rc": 0
+ },
+ "q16_add/ice40": {
+  "cells": {
+   "SB_CARRY": 32,
+   "SB_DFF": 64,
+   "SB_DFFSR": 1,
+   "SB_DFFSS": 31,
+   "SB_LUT4": 66
+  },
+  "design": "q16_add",
+  "fmax_mhz": 109.51703643798828,
+  "pnr_rc": 0,
+  "target": "ice40",
+  "utilization": {
+   "ICESTORM_LC": 132,
+   "SB_GB": 1,
+   "SB_IO": 97
+  },
+  "yosys_rc": 0
+ },
+ "q16_mac/ecp5": {
+  "cells": {
+   "CCU2C": 66,
+   "LUT4": 127,
+   "MULT18X18D": 4,
+   "TRELLIS_FF": 132
+  },
+  "design": "q16_mac",
+  "fmax_mhz": 83.7030258178711,
+  "pnr_rc": 0,
+  "target": "ecp5",
+  "utilization": {
+   "DCCA": 1,
+   "MULT18X18D": 4,
+   "TRELLIS_COMB": 277,
+   "TRELLIS_FF": 132,
+   "TRELLIS_IO": 98
+  },
+  "yosys_rc": 0
+ },
+ "q16_mac/ice40": {
+  "cells": {
+   "SB_CARRY": 105,
+   "SB_DFF": 100,
+   "SB_DFFSR": 1,
+   "SB_DFFSS": 31,
+   "SB_LUT4": 2579
+  },
+  "design": "q16_mac",
+  "fmax_mhz": 53.106746673583984,
+  "pnr_rc": 0,
+  "target": "ice40",
+  "utilization": {
+   "ICESTORM_LC": 2659,
+   "SB_GB": 1,
+   "SB_IO": 98
+  },
+  "yosys_rc": 0
+ },
+ "q16_mul/ecp5": {
+  "cells": {
+   "CCU2C": 87,
+   "L6MUX21": 1,
+   "LUT4": 40,
+   "MULT18X18D": 4,
+   "PFUMX": 2,
+   "TRELLIS_FF": 145
+  },
+  "design": "q16_mul",
+  "fmax_mhz": 84.1538314819336,
+  "pnr_rc": 0,
+  "target": "ecp5",
+  "utilization": {
+   "DCCA": 1,
+   "MULT18X18D": 4,
+   "TRELLIS_COMB": 238,
+   "TRELLIS_FF": 145,
+   "TRELLIS_IO": 97
+  },
+  "yosys_rc": 0
+ },
+ "q16_mul/ice40": {
+  "cells": {
+   "SB_CARRY": 162,
+   "SB_DFF": 113,
+   "SB_DFFSR": 1,
+   "SB_DFFSS": 31,
+   "SB_LUT4": 3048
+  },
+  "design": "q16_mul",
+  "fmax_mhz": 47.8743782043457,
+  "pnr_rc": 0,
+  "target": "ice40",
+  "utilization": {
+   "ICESTORM_LC": 3183,
+   "SB_GB": 1,
+   "SB_IO": 97
+  },
+  "yosys_rc": 0
+ }
+}

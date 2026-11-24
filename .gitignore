@@ -2,3 +2,12 @@ __pycache__/
 *.pyc
 *.pyo
 .venv/
+# fpga build outputs
+fpga/build/
+fpga/build_*.log
+fpga/synth.done
+fpga/tb/vectors.txt
+fpga/tb/*.hex
+fpga/tb/sim
+fpga/tb/simt
+fpga/rtl/tmp/
